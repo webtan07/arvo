@@ -1,0 +1,10 @@
+node_modules
+dist
+.tanstack
+.run
+.env
+.env.*
+!.env.example
+src/routeTree.gen.ts
+.vercel
+*.log
