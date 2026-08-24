@@ -60,11 +60,27 @@ export const CREATE_TABLES: string[] = [
     customer_email  TEXT NOT NULL,
     customer_phone  TEXT,
     status          TEXT NOT NULL DEFAULT 'pending',
-    -- payment_option: e.g. 'pay_at_shop' | 'pay_online' | NULL (to decide later)
+    -- payment_option: 'pay_online' (card at booking) | 'pay_on_day' (no charge now)
     payment_option  TEXT,
+    -- Paid flag: true once the Stripe card payment succeeded (pay_online).
+    -- pay_on_day bookings stay unpaid until settled at the shop.
+    paid            BOOLEAN NOT NULL DEFAULT false,
+    -- Stripe PaymentIntent id when the customer paid online (TEST MODE).
+    payment_intent_id TEXT,
+    -- Notification: dashboard shows unread (seen=false) bookings as new.
+    seen            BOOLEAN NOT NULL DEFAULT false,
     notes           TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
+];
+
+// Idempotent column migrations for databases created before these columns existed.
+// (CREATE TABLE IF NOT EXISTS won't add columns to an existing table, so ALTER ... IF
+// NOT EXISTS keeps a previously-scaffolded database in sync.)
+export const ALTER_TABLES: string[] = [
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT false`,
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS payment_intent_id TEXT`,
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS seen BOOLEAN NOT NULL DEFAULT false`,
 ];
 
 /**
@@ -76,7 +92,8 @@ export const CREATE_TABLES: string[] = [
 export async function ensureSchema(): Promise<void> {
   const db = sql();
   const errors: string[] = [];
-  for (const statement of CREATE_TABLES) {
+  const all = [...CREATE_TABLES, ...ALTER_TABLES];
+  for (const statement of all) {
     try {
       await db`${db.unsafe(statement)}`;
     } catch (e) {

@@ -1,11 +1,15 @@
 @import "tailwindcss";
 
 @theme {
-  --color-ink: #1a1a1a;
-  --color-ink-soft: #555;
+  --color-ink: #111827;
+  --color-ink-soft: #6b7280;
   --color-paper: #ffffff;
-  --color-line: #e5e5e5;
-  --color-brand: #1f6feb; /* Arvo primary */
+  --color-surface: #f6f7f9;
+  --color-line: #e5e7eb;
+  --color-brand: #1f6feb; /* Arvo primary — clean, automotive blue */
+  --color-brand-dark: #1a5cd2;
+  --color-green: #16a34a;
+  --color-amber: #d97706;
 }
 
 body {
@@ -14,5 +18,34 @@ body {
 }
 
 .font-display {
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: "Poppins", "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-5 py-3 text-sm font-bold text-white transition;
+}
+.btn:hover {
+  @apply bg-brand-dark;
+}
+.btn:disabled {
+  @apply cursor-not-allowed opacity-50;
+}
+.btn-outline {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl border border-line bg-paper px-5 py-3 text-sm font-bold text-ink transition;
+}
+.btn-outline:hover {
+  @apply border-brand text-brand;
+}
+.card {
+  @apply rounded-2xl border border-line bg-paper;
+}
+.input {
+  @apply w-full rounded-xl border border-line bg-surface px-4 py-3 text-sm text-ink outline-none transition;
+}
+.input:focus {
+  @apply border-brand ring-2 ring-brand/20;
+}
+.chip {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold;
 }
