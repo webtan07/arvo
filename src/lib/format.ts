@@ -1,7 +1,7 @@
 /** Shared formatting helpers for the Arvo UI. */
 
-export function formatGBP(cents: number): string {
-  return `£${(cents / 100).toFixed(2)}`;
+export function formatAUD(cents: number): string {
+  return `A$${(cents / 100).toFixed(2)}`;
 }
 
 export function formatDuration(min: number): string {
@@ -38,7 +38,7 @@ export function formatDateTime(iso: string): string {
 
 export function formatCreated(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleString("en-GB", {
+  return d.toLocaleString("en-AU", {
     day: "numeric",
     month: "short",
     hour: "2-digit",

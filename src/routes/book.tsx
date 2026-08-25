@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { getShop, getAvailableSlots, createBooking } from "~/db/server";
 import type { CreateBookingResult, SlotRow, ServiceRow, ShopRow } from "~/db/server";
-import { formatDuration, formatGBP, formatSlotDate, formatTime } from "~/lib/format";
+import { formatDuration, formatAUD, formatSlotDate, formatTime } from "~/lib/format";
 import PaymentForm from "~/components/PaymentForm";
 
 export const Route = createFileRoute("/book")({
@@ -159,7 +159,7 @@ function BookPage() {
           </div>
           <div className="text-right">
             <p className="font-display text-xl font-extrabold text-brand">
-              {formatGBP(service.price_cents)}
+              {formatAUD(service.price_cents)}
             </p>
             <p className="text-sm text-ink-soft">{formatDuration(service.duration_min)}</p>
           </div>
@@ -274,7 +274,7 @@ function BookPage() {
               />
               <label htmlFor="pay-online" className="flex-1">
                 <span className="block font-bold">
-                  Pay now — {formatGBP(service.price_cents)}
+                  Pay now — {formatAUD(service.price_cents)}
                 </span>
                 <span className="text-sm text-ink-soft">Secure card payment at booking</span>
               </label>

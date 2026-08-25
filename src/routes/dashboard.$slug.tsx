@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { getDashboard, markBookingsSeen } from "~/db/server";
 import type { BookingView } from "~/db/server";
-import { formatCreated, formatDateTime, formatGBP } from "~/lib/format";
+import { formatCreated, formatDateTime, formatAUD } from "~/lib/format";
 
 export const Route = createFileRoute("/dashboard/$slug")({
   component: DashboardPage,
@@ -111,7 +111,7 @@ function DashboardPage() {
                 </div>
                 {b.priceCents != null && (
                   <span className="shrink-0 text-sm font-extrabold text-brand">
-                    {formatGBP(b.priceCents)}
+                    {formatAUD(b.priceCents)}
                   </span>
                 )}
               </li>

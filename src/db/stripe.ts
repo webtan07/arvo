@@ -80,7 +80,7 @@ export async function createPaymentIntent(opts: {
   return { id: data.id, clientSecret: data.client_secret };
 }
 
-/** Format cents (GBP) as a display string, e.g. 2500 -> "£25.00". */
-export function formatGBP(cents: number): string {
-  return `£${(cents / 100).toFixed(2)}`;
+/** Format cents (AUD) as a display string, e.g. 2500 -> "A$25.00". */
+export function formatAUD(cents: number): string {
+  return `A$${(cents / 100).toFixed(2)}`;
 }

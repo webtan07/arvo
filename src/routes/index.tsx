@@ -103,7 +103,7 @@ function HomePage() {
               ? `${filtered.length} ${filtered.length === 1 ? "shop" : "shops"} match "${
                   query.trim() || "all"
                 }"`
-              : `${shops.length} detailers across the UK — book in under a minute.`}
+              : `${shops.length} detailers across Australia — book in under a minute.`}
           </p>
         </div>
       </section>
