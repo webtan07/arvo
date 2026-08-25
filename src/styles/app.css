@@ -6,8 +6,8 @@
   --color-paper: #ffffff;
   --color-surface: #f6f7f9;
   --color-line: #e5e7eb;
-  --color-brand: #1f6feb; /* Arvo primary — clean, automotive blue */
-  --color-brand-dark: #1a5cd2;
+  --color-brand: #F0A010; /* Arvo golden-amber (logo color) */
+  --color-brand-dark: #D08A06;
   --color-green: #16a34a;
   --color-amber: #d97706;
 }
