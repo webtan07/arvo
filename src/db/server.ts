@@ -14,6 +14,8 @@ export interface ShopRow {
   photos: string[];
   description: string | null;
   serviceCount?: number;
+  /** aggregated service names — used for the home-page search filter */
+  services?: string[];
 }
 
 export interface ServiceRow {
@@ -99,11 +101,17 @@ export const listShops = createServerFn().handler(async (): Promise<ShopRow[]> =
   await ensureSeed();
   const db = sql();
   const rows = await db`
-    SELECT s.*, (SELECT count(*) FROM arvo.services sv WHERE sv.shop_id = s.id)::int AS service_count
+    SELECT s.*,
+      (SELECT count(*) FROM arvo.services sv WHERE sv.shop_id = s.id)::int AS service_count,
+      COALESCE((SELECT array_agg(sv.name) FROM arvo.services sv WHERE sv.shop_id = s.id), ARRAY[]::text[]) AS service_names
     FROM arvo.shops s
     ORDER BY s.name
   `;
-  return rows.map((r: Record<string, any>) => ({ ...asShop(r), serviceCount: Number(r.service_count) }));
+  return rows.map((r: Record<string, any>) => ({
+    ...asShop(r),
+    serviceCount: Number(r.service_count),
+    services: Array.isArray(r.service_names) ? (r.service_names as string[]) : [],
+  }));
 });
 
 /** A single shop + its full service menu + photos. */

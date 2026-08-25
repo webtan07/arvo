@@ -79,7 +79,7 @@ const SHOPS: ShopSeed[] = [
     address: "14 Progress Way, Manchester M12 4HN",
     description:
       "A family-run studio specialising in paint protection and full details. Every car leaves with a shine you can feel.",
-    photos: [PRIMARY_LOGO, ALT_LOGO, PRIMARY_LOGO],
+    photos: ["/img/shop-1.jpg", "/img/full-detail.jpg", "/img/ceramic.jpg"],
   },
   {
     slug: "apex-auto-spa",
@@ -87,7 +87,7 @@ const SHOPS: ShopSeed[] = [
     address: "3 Riverside Industrial Estate, Birmingham B5 5RH",
     description:
       "Ceramic coatings and showroom-ready finishes. Our technicians train on the latest coatings so your paint lasts.",
-    photos: [ALT_LOGO, PRIMARY_LOGO],
+    photos: ["/img/shop-2.jpg", "/img/ceramic.jpg", "/img/paint-correction.jpg"],
   },
   {
     slug: "urban-swirl-studio",
@@ -95,7 +95,7 @@ const SHOPS: ShopSeed[] = [
     address: "22 Kelvin Road, Leeds LS12 3AB",
     description:
       "From a quick wash to a full correction, we keep the city's best cars looking brand new. Easy to book, easy to park.",
-    photos: [PRIMARY_LOGO],
+    photos: ["/img/shop-3.jpg", "/img/interior-valet.jpg", "/img/exterior-wash.jpg"],
   },
 ];
 
@@ -151,6 +151,11 @@ export async function ensureSeed(): Promise<void> {
     } else {
       shopId = Number((existing[0] as { id: number }).id);
     }
+
+    // Keep photos current on seeded shops (idempotent — we always set the seed
+    // images, so kitchens/DBs seeded before the real detail photos were added
+    // pick them up on the next run without touching real bookings).
+    await db`UPDATE arvo.shops SET photos = ${JSON.stringify(shop.photos)}::jsonb WHERE id = ${shopId}`;
 
     // Seed services only if the shop has none.
     const svcCount = await db`SELECT count(*)::int AS n FROM arvo.services WHERE shop_id = ${shopId}`;

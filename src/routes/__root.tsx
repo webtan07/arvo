@@ -28,7 +28,7 @@ function RootDocument() {
               <img
                 src={LOGO}
                 alt="Arvo logo"
-                className="h-11 w-11 rounded-xl object-cover"
+                className="h-11 w-11 rounded-xl border border-line bg-white object-contain shadow-sm"
                 width={44}
                 height={44}
               />
