@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { sql, requireEnv } from "./connection";
 import { ensureSeed } from "./seed";
-import { createPaymentIntent, formatGBP, getStripeConfig } from "./stripe";
+import { createPaymentIntent, formatAUD, getStripeConfig } from "./stripe";
 
 /** Minimum lead time (ms) before a slot start to allow booking. */
 export const MIN_LEAD_MS = 3 * 60 * 60 * 1000; // 3 hours
@@ -192,7 +192,7 @@ export interface CreateBookingResult {
   payment?: {
     mode: PaymentOption;
     amountCents: number;
-    /** formatted price, e.g. "£25.00" */
+    /** formatted price, e.g. "A$25.00" */
     amountDisplay: string;
     hasKeys: boolean;
     /** present only when hasKeys (real Stripe Payment Element) */
@@ -250,7 +250,7 @@ export const createBooking = createServerFn()
       if (paymentOption === "pay_online" && stripe.hasKeys) {
         const pi = await createPaymentIntent({
           amountCents: priceCents,
-          currency: "gbp",
+          currency: "aud",
           customerName: data.customerName,
           customerEmail: data.customerEmail,
           shopName: String(shop.name),
@@ -285,7 +285,7 @@ export const createBooking = createServerFn()
         payment: {
           mode: paymentOption,
           amountCents: priceCents,
-          amountDisplay: formatGBP(priceCents),
+          amountDisplay: formatAUD(priceCents),
           hasKeys: stripe.hasKeys,
           ...(clientSecret && stripe.hasKeys
             ? { clientSecret, publishableKey: stripe.publishableKey }

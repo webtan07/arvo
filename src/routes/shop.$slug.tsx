@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { getShop } from "~/db/server";
-import { formatDuration, formatGBP } from "~/lib/format";
+import { formatDuration, formatAUD } from "~/lib/format";
 import { SmartImage } from "~/components/SmartImage";
 import {
   DEFAULT_COVER,
@@ -108,7 +108,7 @@ function ShopPage() {
                 <div className="mb-2 flex items-start justify-between gap-3">
                   <h3 className="font-display text-lg font-bold">{s.name}</h3>
                   <span className="font-display text-lg font-extrabold text-brand">
-                    {formatGBP(s.price_cents)}
+                    {formatAUD(s.price_cents)}
                   </span>
                 </div>
                 {s.description && (

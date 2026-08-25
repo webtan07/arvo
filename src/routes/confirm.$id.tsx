@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { getBooking } from "~/db/server";
-import { formatDateTime, formatGBP } from "~/lib/format";
+import { formatDateTime, formatAUD } from "~/lib/format";
 
 export const Route = createFileRoute("/confirm/$id")({
   component: ConfirmPage,
@@ -53,7 +53,7 @@ function ConfirmPage() {
               label="Payment"
               value={
                 paidOnline
-                  ? `Paid online (${formatGBP(booking.priceCents ?? 0)})`
+                  ? `Paid online (${formatAUD(booking.priceCents ?? 0)})`
                   : payOnDay
                     ? "Pay on the day"
                     : "Payment pending"

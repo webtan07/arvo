@@ -76,7 +76,7 @@ const SHOPS: ShopSeed[] = [
   {
     slug: "shine-dog-detailing",
     name: "Shine Dog Detailing",
-    address: "14 Progress Way, Manchester M12 4HN",
+    address: "14 Progress Way, Alexandria NSW 2015",
     description:
       "A family-run studio specialising in paint protection and full details. Every car leaves with a shine you can feel.",
     photos: ["/img/shop-1.jpg", "/img/full-detail.jpg", "/img/ceramic.jpg"],
@@ -84,7 +84,7 @@ const SHOPS: ShopSeed[] = [
   {
     slug: "apex-auto-spa",
     name: "Apex Auto Spa",
-    address: "3 Riverside Industrial Estate, Birmingham B5 5RH",
+    address: "3 Riverside Industrial Estate, Port Melbourne VIC 3207",
     description:
       "Ceramic coatings and showroom-ready finishes. Our technicians train on the latest coatings so your paint lasts.",
     photos: ["/img/shop-2.jpg", "/img/ceramic.jpg", "/img/paint-correction.jpg"],
@@ -92,7 +92,7 @@ const SHOPS: ShopSeed[] = [
   {
     slug: "urban-swirl-studio",
     name: "Urban Swirl Studio",
-    address: "22 Kelvin Road, Leeds LS12 3AB",
+    address: "22 Kelvin Road, Woolloongabba QLD 4102",
     description:
       "From a quick wash to a full correction, we keep the city's best cars looking brand new. Easy to book, easy to park.",
     photos: ["/img/shop-3.jpg", "/img/interior-valet.jpg", "/img/exterior-wash.jpg"],
