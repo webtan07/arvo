@@ -13,7 +13,7 @@ export const Route = createRootRoute({
   component: RootDocument,
 });
 
-const LOGO = "/logo/F950D59B-C1EE-49E6-A524-065C166C61CD.JPG";
+const LOGO = "/img/logo-header.png";
 
 function RootDocument() {
   return (
@@ -28,13 +28,10 @@ function RootDocument() {
               <img
                 src={LOGO}
                 alt="Arvo logo"
-                className="h-11 w-11 rounded-xl border border-line bg-white object-contain shadow-sm"
-                width={44}
-                height={44}
+                className="h-9 w-auto object-contain"
+                width={450}
+                height={90}
               />
-              <span className="font-display text-2xl font-extrabold tracking-tight text-ink">
-                arvo<span className="text-brand">.</span>
-              </span>
             </Link>
             <nav className="flex items-center gap-4 text-sm font-semibold text-ink-soft">
               <Link to="/" className="hover:text-brand">
