@@ -132,3 +132,73 @@ We'll email you 1 day before and text you 1 hour before your appointment.
     SEND_TIMEOUT_MS,
   );
 }
+export interface BookingReminderData {
+  to: string;
+  reference: string;
+  shopName: string;
+  serviceName: string;
+  /** Date/time already formatted en-AU, e.g. "Monday 25 July, 10:00 am". */
+  when: string;
+  address: string | null;
+  /**
+   * Human label for how soon the appointment is — used in the subject line.
+   * e.g. "tomorrow" (24h reminder) or "in about an hour" (SMS/phone reminder).
+   */
+  soonLabel: string;
+}
+/**
+ * Send the booking reminder email (the ~24h-before appointment reminder).
+ * Throws on failure — callers MUST guard this with try/catch so a mail failure
+ * never crashes the reminder sweep (see src/lib/reminders.ts).
+ */
+export async function sendBookingReminderEmail(
+  data: BookingReminderData,
+): Promise<unknown> {
+  const fromUser = senderEmail();
+  if (!fromUser) {
+    throw new Error("EMAIL_USER is not set — cannot send reminder email.");
+  }
+  if (!process.env.EMAIL_APP_PASSWORD) {
+    throw new Error("EMAIL_APP_PASSWORD is not set — cannot send reminder email.");
+  }
+  const when = data.when;
+  const lead = data.soonLabel;
+  const address = data.address || "";
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto;padding:24px;">
+      <p style="font-size:13px;letter-spacing:.15em;color:#B45309;text-transform:uppercase;font-weight:bold;">Arvo · Car Detailing</p>
+      <h1 style="font-size:24px;line-height:1.3;margin:8px 0 4px;">Just a reminder — ${when}</h1>
+      <p style="font-size:15px;color:#4b5563;">Your appointment is ${lead}. We're looking forward to seeing you!</p>
+      <div style="background:#FFF7ED;border:1px solid #FDE1BC;border-radius:14px;padding:20px;margin:20px 0;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr><td style="padding:6px 0;color:#6b7280;">Reference</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.reference}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Shop</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.shopName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Service</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.serviceName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">When</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${when}</td></tr>
+          ${address ? `<tr><td style="padding:6px 0;color:#6b7280;">Address</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${address}</td></tr>` : ""}
+        </table>
+      </div>
+      <p style="font-size:13px;color:#9ca3af;">No action needed — this is just a friendly heads-up. If you need to reschedule, get in touch with the shop.</p>
+    </div>
+  `.trim();
+  const text = `
+Arvo · Car Detailing
+Just a reminder — your appointment is ${lead}.
+Reference: ${data.reference}
+Shop:      ${data.shopName}
+Service:   ${data.serviceName}
+When:      ${when}${address ? `\nAddress:   ${address}` : ""}
+No action needed — this is just a friendly heads-up.
+  `.trim();
+  const transporter = createTransporter();
+  return await withTimeout(
+    transporter.sendMail({
+      from: `"Arvo" <${fromUser}>`,
+      to: data.to,
+      subject: `Reminder: your Arvo appointment ${lead} — ${when}`,
+      html,
+      text,
+    }),
+    SEND_TIMEOUT_MS,
+  );
+}
