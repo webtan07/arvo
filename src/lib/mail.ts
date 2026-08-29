@@ -202,3 +202,56 @@ No action needed — this is just a friendly heads-up.
     SEND_TIMEOUT_MS,
   );
 }
+
+export interface PasswordResetData {
+  to: string;
+  /** Absolute reset URL (contains the raw single-use token). */
+  resetUrl: string;
+  /** "customer" | "owner" — changes the copy slightly. */
+  kind: "customer" | "owner";
+}
+
+/**
+ * Send a password-reset email. Throws on failure — callers MUST guard this with
+ * try/catch so a mail failure never breaks or distinguishes the reset flow
+ * (the caller always returns a generic response regardless).
+ */
+export async function sendPasswordResetEmail(
+  data: PasswordResetData,
+): Promise<unknown> {
+  const fromUser = senderEmail();
+  const label = data.kind === "owner" ? "Arvo shop owner" : "Arvo";
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto;padding:24px;">
+      <p style="font-size:13px;letter-spacing:.15em;color:#B45309;text-transform:uppercase;font-weight:bold;">Arvo · Car Detailing</p>
+      <h1 style="font-size:24px;line-height:1.3;margin:8px 0 4px;">Reset your password</h1>
+      <p style="font-size:15px;color:#4b5563;">We received a request to reset the password for your ${label} account. Use the link below — it expires in 40 minutes and can only be used once.</p>
+      <p style="margin:24px 0;">
+        <a href="${data.resetUrl}" style="display:inline-block;background:#B45309;color:#fff;padding:12px 22px;border-radius:10px;text-decoration:none;font-weight:bold;">Reset password</a>
+      </p>
+      <p style="font-size:13px;color:#9ca3af;">If you didn't request this, you can safely ignore this email — your password won't change.</p>
+    </div>
+  `.trim();
+  const text = `
+Arvo · Car Detailing
+
+Reset your password.
+
+We received a request to reset the password for your ${label} account. Use this link within 40 minutes (single use):
+
+${data.resetUrl}
+
+If you didn't request this, you can safely ignore this email — your password won't change.
+  `.trim();
+  const transporter = createTransporter();
+  return await withTimeout(
+    transporter.sendMail({
+      from: `"Arvo" <${fromUser}>`,
+      to: data.to,
+      subject: "Reset your Arvo password",
+      html,
+      text,
+    }),
+    SEND_TIMEOUT_MS,
+  );
+}
