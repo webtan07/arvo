@@ -1,4 +1,5 @@
 import { HeadContent, Link, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+import { useSession } from "~/lib/useSession";
 import appCss from "~/styles/app.css?url";
 
 export const Route = createRootRoute({
@@ -16,6 +17,10 @@ export const Route = createRootRoute({
 const LOGO = "/img/logo-header.png";
 
 function RootDocument() {
+  const session = useSession();
+  const isOwner = session.status === "owner";
+  // Server-verified shop slug for a logged-in owner (null = no shop yet edge).
+  const ownerSlug = isOwner && session.slug ? session.slug : null;
   return (
     <html lang="en">
       <head>
@@ -37,12 +42,38 @@ function RootDocument() {
               <Link to="/" className="hover:text-brand">
                 Shops
               </Link>
-              <Link to="/account" className="hover:text-brand">
-                My bookings
-              </Link>
-              <Link to="/owner/login" className="hover:text-brand">
-                For detailers
-              </Link>
+              {/* Owner → their shop dashboard; customer/guest → My Bookings. */}
+              {isOwner ? (
+                ownerSlug ? (
+                  <Link to="/dashboard/$slug" params={{ slug: ownerSlug }} className="hover:text-brand">
+                    My bookings
+                  </Link>
+                ) : (
+                  <Link to="/owner/register" className="hover:text-brand">
+                    My bookings
+                  </Link>
+                )
+              ) : (
+                <Link to="/account" className="hover:text-brand">
+                  My bookings
+                </Link>
+              )}
+              {/* Owner → "Dashboard" into their shop; customer/guest → "For detailers". */}
+              {isOwner ? (
+                ownerSlug ? (
+                  <Link to="/dashboard/$slug" params={{ slug: ownerSlug }} className="hover:text-brand">
+                    Dashboard
+                  </Link>
+                ) : (
+                  <Link to="/owner/register" className="hover:text-brand">
+                    Dashboard
+                  </Link>
+                )
+              ) : (
+                <Link to="/owner/login" className="hover:text-brand">
+                  For detailers
+                </Link>
+              )}
               <span className="hidden rounded-full bg-brand px-3 py-1 text-xs font-bold text-white sm:inline">
                 Car detailing · book online
               </span>
