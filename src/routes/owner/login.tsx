@@ -104,17 +104,15 @@ function OwnerLoginPage() {
         </p>
       </div>
 
-      <p className="mt-6 space-y-1 text-center text-sm text-ink-soft">
-        <div>
-          <Link to="/login" className="hover:text-brand">
-            Customer login
-          </Link>{" "}
-          ·{" "}
-          <Link to="/" className="hover:text-brand">
-            Browse shops
-          </Link>
-        </div>
-      </p>
+      <div className="mt-6 text-center text-sm text-ink-soft">
+        <Link to="/login" className="hover:text-brand">
+          Customer login
+        </Link>{" "}
+        ·{" "}
+        <Link to="/" className="hover:text-brand">
+          Browse shops
+        </Link>
+      </div>
     </div>
   );
 }
