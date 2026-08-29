@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { getShop, getAvailableSlots, createBooking } from "~/db/server";
-import type { CreateBookingResult, SlotRow, ServiceRow, ShopRow } from "~/db/server";
+import { getShop, getSlotGrid, createBooking } from "~/db/server";
+import type { CreateBookingResult, GridSlot, ServiceRow, ShopRow } from "~/db/server";
 import { formatDuration, formatAUD, formatSlotDate, formatTime } from "~/lib/format";
 import PaymentForm from "~/components/PaymentForm";
 
@@ -20,7 +20,7 @@ function BookPage() {
   const { shop: shopSlug, service: serviceSlug } = Route.useSearch();
 
   const [shopData, setShopData] = useState<{ shop: ShopRow; services: ServiceRow[] } | null>(null);
-  const [slots, setSlots] = useState<SlotRow[]>([]);
+  const [slots, setSlots] = useState<GridSlot[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [step, setStep] = useState<Step>("slot");
@@ -29,7 +29,6 @@ function BookPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [paymentOption, setPaymentOption] = useState<"pay_online" | "pay_on_day" | null>(null);
 
   const [creating, setCreating] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
@@ -45,7 +44,7 @@ function BookPage() {
       try {
         const [shopResult, slotResult] = await Promise.all([
           getShop({ data: shopSlug }),
-          getAvailableSlots({ data: { shopSlug } }),
+          getSlotGrid({ data: { shopSlug } }),
         ]);
         if (!active) return;
         if (!shopResult) {
@@ -69,7 +68,7 @@ function BookPage() {
   );
 
   const groupedSlots = useMemo(() => {
-    const map = new Map<string, SlotRow[]>();
+    const map = new Map<string, GridSlot[]>();
     for (const s of slots) {
       const key = formatSlotDate(s.starts_at);
       if (!map.has(key)) map.set(key, []);
@@ -105,6 +104,7 @@ function BookPage() {
     if (!slotId || !shopSlug || !serviceSlug) return;
     setCreating(true);
     setCreateErr(null);
+    // Every booking pays now — there is no "pay on the day" option.
     const res = await createBooking({
       data: {
         shopSlug,
@@ -113,7 +113,6 @@ function BookPage() {
         customerName: name,
         customerEmail: email,
         customerPhone: phone,
-        paymentOption: paymentOption === "pay_online" ? "pay_online" : "pay_on_day",
       },
     });
     setCreating(false);
@@ -121,11 +120,14 @@ function BookPage() {
       setCreateErr(res.error || "Booking failed. Please try again.");
       return;
     }
-    if (paymentOption === "pay_on_day" || !res.payment) {
+    // Bookings always carry a payment intent (real Stripe or demo mode), so we
+    // hand off to the card form. Fall back to the confirmation page if no
+    // payment payload came back (defensive only).
+    if (!res.payment) {
       goToConfirm(res.booking.id);
-    } else {
-      setCreated(res);
+      return;
     }
+    setCreated(res);
   }
 
   const canConfirmDetails = name.trim().length > 0 && /\S+@\S+\.\S+/.test(email);
@@ -170,7 +172,8 @@ function BookPage() {
         <section>
           <h2 className="mb-4 font-display text-xl font-bold">Choose a time</h2>
           <p className="mb-4 text-sm text-ink-soft">
-            Bookings close 3 hours before the slot starts.
+            Bookings close 3 hours before the slot starts. Greyed-out times are
+            already booked or unavailable.
           </p>
           {groupedSlots.length === 0 ? (
             <p className="rounded-xl bg-surface p-6 text-center text-ink-soft">
@@ -182,20 +185,36 @@ function BookPage() {
                 <div key={day}>
                   <p className="mb-2 text-sm font-bold text-ink-soft">{day}</p>
                   <div className="flex flex-wrap gap-2">
-                    {daySlots.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => setSlotId(String(s.id))}
-                        className={`rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${
-                          slotId === String(s.id)
-                            ? "border-brand bg-brand text-white"
-                            : "border-line bg-paper hover:border-brand hover:text-brand"
-                        }`}
-                      >
-                        {formatTime(s.starts_at)}
-                      </button>
-                    ))}
+                    {daySlots.map((s) =>
+                      s.available ? (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setSlotId(String(s.id))}
+                          className={`rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${
+                            slotId === String(s.id)
+                              ? "border-brand bg-brand text-white"
+                              : "border-line bg-paper hover:border-brand hover:text-brand"
+                          }`}
+                        >
+                          {formatTime(s.starts_at)}
+                        </button>
+                      ) : (
+                        <button
+                          key={s.id}
+                          type="button"
+                          disabled
+                          aria-disabled="true"
+                          title={s.is_open ? "Already booked" : "Unavailable"}
+                          className="cursor-not-allowed rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-ink-soft opacity-45"
+                        >
+                          {formatTime(s.starts_at)}
+                          <span className="ml-1.5 text-[10px] font-bold uppercase tracking-wide">
+                            {s.is_open ? "Booked" : "Unavailable"}
+                          </span>
+                        </button>
+                      ),
+                    )}
                   </div>
                 </div>
               ))}
@@ -244,7 +263,7 @@ function BookPage() {
                 className="input"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                placeholder="07700 900000"
+                placeholder="0400 000 000"
               />
             </div>
           </div>
@@ -263,41 +282,17 @@ function BookPage() {
         <section>
           <h2 className="mb-4 font-display text-xl font-bold">Payment</h2>
           <div className="card space-y-4 p-5">
-            <div className="flex items-center gap-3">
-              <input
-                type="radio"
-                id="pay-online"
-                name="payment"
-                checked={paymentOption === "pay_online"}
-                onChange={() => setPaymentOption("pay_online")}
-                className="h-4 w-4 accent-brand"
-              />
-              <label htmlFor="pay-online" className="flex-1">
-                <span className="block font-bold">
-                  Pay now — {formatAUD(service.price_cents)}
-                </span>
-                <span className="text-sm text-ink-soft">Secure card payment at booking</span>
-              </label>
-            </div>
-            <div className="flex items-center gap-3">
-              <input
-                type="radio"
-                id="pay-on-day"
-                name="payment"
-                checked={paymentOption === "pay_on_day"}
-                onChange={() => setPaymentOption("pay_on_day")}
-                className="h-4 w-4 accent-brand"
-              />
-              <label htmlFor="pay-on-day" className="flex-1">
-                <span className="block font-bold">Pay on the day</span>
-                <span className="text-sm text-ink-soft">No charge now — pay at the shop</span>
-              </label>
-            </div>
+            <p className="rounded-xl bg-surface p-3 text-sm text-ink-soft">
+              Payment is taken securely at booking — there's no "pay on the day"
+              option.
+            </p>
 
             {selectedSlot && (
               <p className="rounded-xl bg-surface p-3 text-sm text-ink-soft">
                 {formatSlotDate(selectedSlot.starts_at)} at{" "}
                 {formatTime(selectedSlot.starts_at)} · {shopData.shop.name} · {service.name}
+                {" · "}
+                <span className="font-semibold text-brand">{formatAUD(service.price_cents)}</span>
               </p>
             )}
             {createErr && <p className="text-sm text-red-600">{createErr}</p>}
@@ -305,15 +300,15 @@ function BookPage() {
             {!created && (
               <button
                 className="btn w-full"
-                disabled={creating || !paymentOption}
+                disabled={creating}
                 onClick={handleConfirm}
               >
                 {creating ? "Please wait…" : "Confirm booking"}
               </button>
             )}
 
-            {/* Card collection (pay online) after the booking is created */}
-            {created?.ok && created.booking && created.payment && paymentOption === "pay_online" && (
+            {/* Card collection after the booking is created (real Stripe or demo mode) */}
+            {created?.ok && created.booking && created.payment && (
               <div className="mt-2 border-t border-line pt-4">
                 <PaymentForm
                   payment={created.payment}

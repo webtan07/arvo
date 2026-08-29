@@ -62,7 +62,7 @@ function HomePage() {
           </h1>
           <p className="mx-auto mt-5 max-w-xl text-lg text-ink-soft">
             Arvo is a home for the best car-detailing shops. Pick a shop, choose
-            a service and grab a slot — pay online or on the day.
+            a service and grab a slot — pay securely online.
           </p>
 
           {/* Prominent, centered search widget */}
