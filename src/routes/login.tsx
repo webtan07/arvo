@@ -66,6 +66,15 @@ function LoginPage() {
               placeholder="••••••••"
               required
             />
+            <div className="mt-1 text-right">
+              <Link
+                to="/forgot-password"
+                search={{ kind: "customer" }}
+                className="text-xs font-semibold text-brand hover:text-brand-dark"
+              >
+                Forgot password?
+              </Link>
+            </div>
           </div>
 
           {error && <p className="text-sm font-semibold text-red-600">{error}</p>}

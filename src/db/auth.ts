@@ -14,7 +14,7 @@
  * user enumeration — we never reveal whether an email exists.
  */
 import { createServerFn } from "@tanstack/react-start";
-import { sql } from "./connection";
+import { sql, config } from "./connection";
 import { ensureSchema } from "./schema";
 // node:crypto is loaded lazily via dynamic import so importing auth.ts from
 // client components never pulls server-only Node builtins into the browser
@@ -426,3 +426,152 @@ export async function resolveSessionUser(token: string): Promise<SessionUser | n
 export const getSessionUser = createServerFn()
   .validator((d: string) => d)
   .handler(async ({ data: token }): Promise<SessionUser | null> => resolveSessionUser(token));
+
+/* ── password reset ──────────────────────────────────────────── */
+
+/** Which account type a reset targets. */
+export type ResetKind = "customer" | "owner";
+
+/** Reset links are valid for 40 minutes. */
+const RESET_TTL_MS = 40 * 60 * 1000;
+
+export interface ResetRequestResult {
+  /** Always true for a well-formed request — never reveals whether the email exists. */
+  ok: boolean;
+  error?: string;
+}
+
+export interface ResetResult {
+  ok: boolean;
+  /** Populated only when the caller provided an invalid/new/weak password. */
+  error?: string;
+}
+
+/**
+ * Request a password reset. Looks the account up by email, stores only a SHA-256
+ * hash of the raw reset token (never the plaintext, and never tied to a
+ * client-supplied user id) with a 40-minute expiry, and emails a single-use link
+ * containing the raw token.
+ *
+ * Anti-enumeration: the response is byte-for-byte the same whether or not an
+ * account with that email exists, and a mail failure is swallowed (logged) so it
+ * can't distinguish an existing account either.
+ */
+export const requestPasswordReset = createServerFn()
+  .validator((d: { email: string; kind: string }) => d)
+  .handler(async ({ data }): Promise<ResetRequestResult> => {
+    const email = (data.email || "").trim().toLowerCase();
+    const kind: ResetKind = data.kind === "owner" ? "owner" : "customer";
+    // Same generic response regardless — never indicate existence.
+    if (!email || !/\S+@\S+\.\S+/.test(email)) {
+      return { ok: true };
+    }
+    await ensureSchema();
+    const db = sql();
+    const { randomBytes } = await nodeCrypto();
+    const rawToken = randomBytes(32).toString("hex");
+    const hash = await tokenHash(rawToken);
+    const expiresAt = new Date(Date.now() + RESET_TTL_MS);
+
+    let rowUpdated: number | null = null;
+    if (kind === "owner") {
+      const rows = await db`
+        UPDATE arvo.owners
+        SET reset_token_hash = ${hash}, reset_token_expires_at = ${expiresAt}
+        WHERE email = ${email}
+        RETURNING id
+      `;
+      if (rows.length) rowUpdated = Number((rows[0] as { id: number }).id);
+    } else {
+      const rows = await db`
+        UPDATE arvo.customers
+        SET reset_token_hash = ${hash}, reset_token_expires_at = ${expiresAt}
+        WHERE email = ${email}
+        RETURNING id
+      `;
+      if (rows.length) rowUpdated = Number((rows[0] as { id: number }).id);
+    }
+
+    // Only email the link if the account actually exists. A mail failure is
+    // logged and swallowed so it never leaks account existence to the caller.
+    if (rowUpdated !== null) {
+      const resetUrl =
+        `${config.appBaseUrl}/reset-password?token=${rawToken}&kind=${kind}`;
+      try {
+        const { sendPasswordResetEmail } = await import("~/lib/mail");
+        await sendPasswordResetEmail({ to: email, resetUrl, kind });
+      } catch (e) {
+        console.error(`[arvo:reset] failed to send reset email to ${email}:`,
+          e instanceof Error ? e.message : e);
+      }
+    }
+    return { ok: true };
+  });
+
+/**
+ * Reset a password from a single-use reset token. The token is looked up by its
+ * HASH (never by any client-supplied user id), bound to the requesting account,
+ * and cleared together with the new password in one atomic UPDATE that also
+ * enforces expiry. A reused/expired/unknown token matches no row and is rejected.
+ * On success, any existing sessions for that account are deleted.
+ */
+export const resetPassword = createServerFn()
+  .validator((d: { token: string; newPassword: string; kind: string }) => d)
+  .handler(async ({ data }): Promise<ResetResult> => {
+    const password = data.newPassword || "";
+    if (password.length < 8) {
+      return { ok: false, error: "Password must be at least 8 characters." };
+    }
+    if (!data.token) {
+      return { ok: false, error: "This reset link is invalid or has expired." };
+    }
+    const kind: ResetKind = data.kind === "owner" ? "owner" : "customer";
+    await ensureSchema();
+    const db = sql();
+    const hash = await tokenHash(data.token);
+    const newHash = await hashPassword(password);
+
+    // Atomic single-use: set the new password and clear the token/hash/expiry in
+    // the same UPDATE guarded by `reset_token_hash = hash AND not expired`. A
+    // second use of the same token finds no row (hash already cleared). No user
+    // id is taken from the client anywhere in this path — the token itself binds
+    // the reset to the account that requested it.
+    let updatedId: number | null = null;
+    if (kind === "owner") {
+      const rows = await db`
+        UPDATE arvo.owners
+        SET password_hash = ${newHash},
+            reset_token_hash = NULL,
+            reset_token_expires_at = NULL
+        WHERE reset_token_hash = ${hash}
+          AND reset_token_expires_at > now()
+        RETURNING id
+      `;
+      if (rows.length) updatedId = Number((rows[0] as { id: number }).id);
+    } else {
+      const rows = await db`
+        UPDATE arvo.customers
+        SET password_hash = ${newHash},
+            reset_token_hash = NULL,
+            reset_token_expires_at = NULL
+        WHERE reset_token_hash = ${hash}
+          AND reset_token_expires_at > now()
+        RETURNING id
+      `;
+      if (rows.length) updatedId = Number((rows[0] as { id: number }).id);
+    }
+
+    if (updatedId === null) {
+      // Generic — an unknown/expired/already-used token looks identical to an
+      // attacker whether or not the account exists.
+      return { ok: false, error: "This reset link is invalid or has expired." };
+    }
+
+    // Invalidate every existing session for this account so the old password's
+    // sessions are dead immediately.
+    await db`
+      DELETE FROM arvo.sessions
+      WHERE user_role = ${kind} AND user_id = ${updatedId}
+    `;
+    return { ok: true };
+  });

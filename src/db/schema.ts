@@ -115,6 +115,13 @@ export const ALTER_TABLES: string[] = [
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS reminder_sms_sent_at TIMESTAMPTZ`,
   `ALTER TABLE ${SCHEMA}.shops ADD COLUMN IF NOT EXISTS schedule JSONB`,
   `ALTER TABLE ${SCHEMA}.owners ADD COLUMN IF NOT EXISTS name TEXT`,
+  // Password-reset: a SHA-256 hash of the raw reset token (never the raw token)
+  // plus its expiry. Both are cleared on successful reset (single-use) or when
+  // the token expires.
+  `ALTER TABLE ${SCHEMA}.customers ADD COLUMN IF NOT EXISTS reset_token_hash TEXT`,
+  `ALTER TABLE ${SCHEMA}.customers ADD COLUMN IF NOT EXISTS reset_token_expires_at TIMESTAMPTZ`,
+  `ALTER TABLE ${SCHEMA}.owners ADD COLUMN IF NOT EXISTS reset_token_hash TEXT`,
+  `ALTER TABLE ${SCHEMA}.owners ADD COLUMN IF NOT EXISTS reset_token_expires_at TIMESTAMPTZ`,
 ];
 
 /**
