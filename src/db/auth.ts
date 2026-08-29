@@ -155,20 +155,162 @@ function slugify(name: string): string {
 /** Existing /img placeholders used as the default gallery for new shops. */
 const DEFAULT_SHOP_PHOTOS = ["/img/shop-1.jpg", "/img/full-detail.jpg", "/img/ceramic.jpg"];
 
+/* ── owner shop setup ─────────────────────────────────────────── */
+
+/** Weekly availability: which days are open + hourly operating window. */
+export interface ShopSchedule {
+  /** 0 = Sunday … 6 = Saturday */
+  openDays: number[];
+  /** first bookable hour of the day (24h), e.g. 8 */
+  startHour: number;
+  /** first hour NOT bookable (24h), e.g. 17 = last slot starts 16:00 */
+  endHour: number;
+}
+
+/** A service the detailer offers, entered during shop setup. */
+export interface ServiceInput {
+  name: string;
+  priceCents: number;
+  durationMin: number;
+  description?: string;
+}
+
+/** Fields needed to create a shop branch (shop row + services + slots). */
+export interface ShopBranchInput {
+  name: string;
+  address: string;
+  description?: string;
+  photos?: string[];
+  schedule?: ShopSchedule;
+  services?: ServiceInput[];
+}
+
+export interface ShopBranchResult {
+  id: number;
+  slug: string;
+  schedule: ShopSchedule;
+}
+
+/** Default availability when the owner skips scheduling: Mon–Sat, 8am–5pm. */
+export function normalizeSchedule(s?: ShopSchedule): ShopSchedule {
+  if (s && Array.isArray(s.openDays) && s.openDays.length > 0) {
+    const openDays = [...new Set(s.openDays.map((d) => Number(d)).filter((d) => d >= 0 && d <= 6))].sort();
+    const startHour = Math.max(0, Math.min(23, Math.floor(Number(s.startHour))));
+    const endHour = Math.max(startHour + 1, Math.min(24, Math.floor(Number(s.endHour))));
+    return { openDays, startHour, endHour };
+  }
+  return { openDays: [1, 2, 3, 4, 5, 6], startHour: 8, endHour: 17 };
+}
+
+/** Generate recurring hourly slots for a shop from its weekly schedule. */
+async function generateSlotsForShop(
+  db: ReturnType<typeof sql>,
+  shopId: number,
+  schedule: ShopSchedule,
+): Promise<void> {
+  const count = await db`SELECT count(*)::int AS n FROM arvo.slots WHERE shop_id = ${shopId}`;
+  if ((count[0] as { n: number }).n > 0) return;
+  const DAYS_AHEAD = 14;
+  const rows: { starts_at: Date; ends_at: Date }[] = [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  for (let day = 0; day < DAYS_AHEAD; day++) {
+    const d = new Date(today.getTime() + day * 86400000);
+    if (!schedule.openDays.includes(d.getDay())) continue;
+    for (let h = schedule.startHour; h < schedule.endHour; h++) {
+      const starts = new Date(d);
+      starts.setHours(h, 0, 0, 0);
+      const ends = new Date(d);
+      ends.setHours(h + 1, 0, 0, 0);
+      rows.push({ starts_at: starts, ends_at: ends });
+    }
+  }
+  for (let i = 0; i < rows.length; i += 50) {
+    const chunk = rows.slice(i, i + 50);
+    for (const r of chunk) {
+      await db`INSERT INTO arvo.slots (shop_id, starts_at, ends_at) VALUES (${shopId}, ${r.starts_at}, ${r.ends_at})`;
+    }
+  }
+}
+
+/**
+ * Create a shop branch: shop row (unique slug + schedule), service menu and
+ * recurring bookable slots. Shared by owner registration and createShopForOwner
+ * so an owner-created shop is immediately bookable online. Client-safe: only
+ * touches connection/schema (no server-only modules).
+ */
+export async function createOwnerShopBranch(
+  db: ReturnType<typeof sql>,
+  input: ShopBranchInput,
+): Promise<ShopBranchResult> {
+  const schedule = normalizeSchedule(input.schedule);
+
+  // Unique slug from the shop name.
+  const base = slugify(input.name);
+  let slug = base;
+  let n = 1;
+  for (;;) {
+    const clash = await db`SELECT id FROM arvo.shops WHERE slug = ${slug}`;
+    if (clash.length === 0) break;
+    slug = `${base}-${n++}`;
+  }
+
+  const photos = input.photos?.length ? input.photos : DEFAULT_SHOP_PHOTOS;
+  const shop = await db`
+    INSERT INTO arvo.shops (slug, name, address, photos, description, schedule)
+    VALUES (${slug}, ${input.name}, ${input.address},
+            ${JSON.stringify(photos)}::jsonb,
+            ${input.description || null},
+            ${JSON.stringify(schedule)}::jsonb)
+    RETURNING id
+  `;
+  const shopId = Number((shop[0] as { id: number }).id);
+
+  // Service menu (per-shop unique slugs).
+  const usedSlugs = new Set<string>();
+  for (const s of input.services ?? []) {
+    if (!s.name) continue;
+    let sSlug = slugify(s.name) || "service";
+    let m = 1;
+    while (usedSlugs.has(sSlug)) sSlug = `${slugify(s.name) || "service"}-${m++}`;
+    usedSlugs.add(sSlug);
+    await db`
+      INSERT INTO arvo.services (shop_id, slug, name, duration_min, price_cents, description)
+      VALUES (${shopId}, ${sSlug}, ${s.name}, ${s.durationMin}, ${s.priceCents}, ${s.description || null})
+    `;
+  }
+
+  await generateSlotsForShop(db, shopId, schedule);
+  return { id: shopId, slug, schedule };
+}
+
+/** Success result for owner registration — includes the new shop's slug. */
+export interface OwnerRegisterResult extends AuthResult {
+  shopSlug?: string;
+}
+
 /**
  * Register a new owner account + their linked shop row (slug auto-generated
- * from the shop name; photos default to the existing /img placeholders).
- * Returns an opaque session token.
+ * from the shop name; services + weekly schedule persisted; photos default to
+ * the existing /img placeholders). Returns an opaque session token + shop slug.
  */
 export const registerOwner = createServerFn()
   .validator(
     (d: {
+      ownerName?: string;
       email: string;
       password: string;
-      shop: { name: string; address: string; description?: string; photos?: string[] };
+      shop: {
+        name: string;
+        address: string;
+        description?: string;
+        photos?: string[];
+        schedule?: ShopSchedule;
+      };
+      services?: ServiceInput[];
     }) => d,
   )
-  .handler(async ({ data }): Promise<AuthResult> => {
+  .handler(async ({ data }): Promise<OwnerRegisterResult> => {
     await ensureSchema();
     const db = sql();
     const email = data.email.trim().toLowerCase();
@@ -186,35 +328,25 @@ export const registerOwner = createServerFn()
       return { ok: false, error: "An account with this email already exists." };
     }
 
-    // Build a unique slug for the shop.
-    const base = slugify(data.shop.name);
-    let slug = base;
-    let n = 1;
-    for (;;) {
-      const clash = await db`SELECT id FROM arvo.shops WHERE slug = ${slug}`;
-      if (clash.length === 0) break;
-      slug = `${base}-${n++}`;
-    }
-
-    const shop = await db`
-      INSERT INTO arvo.shops (slug, name, address, photos, description)
-      VALUES (${slug}, ${data.shop.name}, ${data.shop.address},
-              ${JSON.stringify(data.shop.photos?.length ? data.shop.photos : DEFAULT_SHOP_PHOTOS)}::jsonb,
-              ${data.shop.description || null})
-      RETURNING id
-    `;
-    const shopId = Number((shop[0] as { id: number }).id);
+    const branch = await createOwnerShopBranch(db, {
+      name: data.shop.name,
+      address: data.shop.address,
+      description: data.shop.description,
+      photos: data.shop.photos,
+      schedule: data.shop.schedule,
+      services: data.services,
+    });
 
     const owner = await db`
-      INSERT INTO arvo.owners (email, password_hash, shop_id)
-      VALUES (${email}, ${await hashPassword(data.password)}, ${shopId})
+      INSERT INTO arvo.owners (email, password_hash, name, shop_id)
+      VALUES (${email}, ${await hashPassword(data.password)}, ${data.ownerName || null}, ${branch.id})
       RETURNING id
     `;
     const ownerId = Number((owner[0] as { id: number }).id);
 
     const token = await newSessionToken();
     await insertSession(token, "owner", ownerId);
-    return { ok: true, sessionToken: token };
+    return { ok: true, sessionToken: token, shopSlug: branch.slug };
   });
 
 /** Log in an existing owner. Generic error on any mismatch. */
@@ -277,15 +409,15 @@ export async function resolveSessionUser(token: string): Promise<SessionUser | n
     return { role: "customer", id: Number(row.id), email: row.email, name: row.name };
   }
   const o = await db`
-    SELECT id, email, shop_id FROM arvo.owners WHERE id = ${userId}
+    SELECT id, email, name, shop_id FROM arvo.owners WHERE id = ${userId}
   `;
   if (o.length === 0) return null;
-  const row = o[0] as { id: number; email: string; shop_id: number | null };
+  const row = o[0] as { id: number; email: string; name: string | null; shop_id: number | null };
   return {
     role: "owner",
     id: Number(row.id),
     email: row.email,
-    name: null,
+    name: row.name,
     shopId: row.shop_id == null ? null : Number(row.shop_id),
   };
 }

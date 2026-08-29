@@ -40,6 +40,9 @@ function RootDocument() {
               <Link to="/account" className="hover:text-brand">
                 My bookings
               </Link>
+              <Link to="/owner/login" className="hover:text-brand">
+                For detailers
+              </Link>
               <span className="hidden rounded-full bg-brand px-3 py-1 text-xs font-bold text-white sm:inline">
                 Car detailing · book online
               </span>

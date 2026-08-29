@@ -3,7 +3,12 @@ import { sql, requireEnv } from "./connection";
 import { ensureSeed } from "./seed";
 import { createPaymentIntent, formatAUD, getStripeConfig } from "./stripe";
 import { sendBookingConfirmationEmail } from "~/lib/mail";
-import { resolveSessionUser } from "./auth";
+import {
+  resolveSessionUser,
+  createOwnerShopBranch,
+  type ServiceInput,
+  type ShopSchedule,
+} from "./auth";
 
 /** Minimum lead time (ms) before a slot start to allow booking. */
 export const MIN_LEAD_MS = 3 * 60 * 60 * 1000; // 3 hours
@@ -443,38 +448,135 @@ export const getBooking = createServerFn()
     return rows.length ? rowToBookingView(rows[0] as Record<string, any>) : null;
   });
 
-/** Shop dashboard: shop + upcoming bookings + unread notification count. */
+export interface DashboardData {
+  shop: ShopRow | null;
+  bookings: BookingView[];
+  unread: number;
+}
+
+/** Load the dashboard data for a shop (bookings + unread count). */
+async function loadDashboard(shopId: number): Promise<DashboardData> {
+  const db = sql();
+  const shops = await db`SELECT * FROM arvo.shops WHERE id = ${shopId}`;
+  if (shops.length === 0) return { shop: null, bookings: [], unread: 0 };
+  const shop = asShop(shops[0] as Record<string, any>);
+  const rows = await db`
+    SELECT b.*, s.name AS shop_name, s.slug AS shop_slug,
+           sv.name AS service_name, sv.duration_min, sv.price_cents,
+           sl.starts_at AS slot_starts, sl.ends_at AS slot_ends
+    FROM arvo.bookings b
+    JOIN arvo.shops s ON s.id = b.shop_id
+    LEFT JOIN arvo.services sv ON sv.id = b.service_id
+    LEFT JOIN arvo.slots sl ON sl.id = b.slot_id
+    WHERE b.shop_id = ${shop.id}
+    ORDER BY COALESCE(sl.starts_at, b.created_at) DESC
+  `;
+  const bookings = rows.map((r: Record<string, any>) => rowToBookingView(r));
+  const unread = bookings.filter((b) => b.status !== "cancelled" && !b.seen).length;
+  return { shop, bookings, unread };
+}
+
+/** Shop dashboard data (maintained for internal reuse; owner-gated via getOwnerDashboard). */
 export const getDashboard = createServerFn()
   .validator((d: string) => d)
   .handler(
-    async ({
-      data: slug,
-    }): Promise<{
-      shop: ShopRow | null;
-      bookings: BookingView[];
-      unread: number;
-    }> => {
+    async ({ data: slug }): Promise<DashboardData> => {
       await ensureSeed();
       const db = sql();
-      const shops = await db`SELECT * FROM arvo.shops WHERE slug = ${slug}`;
+      const shops = await db`SELECT id FROM arvo.shops WHERE slug = ${slug}`;
       if (shops.length === 0) return { shop: null, bookings: [], unread: 0 };
-      const shop = asShop(shops[0] as Record<string, any>);
-      const rows = await db`
-        SELECT b.*, s.name AS shop_name, s.slug AS shop_slug,
-               sv.name AS service_name, sv.duration_min, sv.price_cents,
-               sl.starts_at AS slot_starts, sl.ends_at AS slot_ends
-        FROM arvo.bookings b
-        JOIN arvo.shops s ON s.id = b.shop_id
-        LEFT JOIN arvo.services sv ON sv.id = b.service_id
-        LEFT JOIN arvo.slots sl ON sl.id = b.slot_id
-        WHERE b.shop_id = ${shop.id}
-        ORDER BY COALESCE(sl.starts_at, b.created_at) DESC
-      `;
-      const bookings = rows.map((r: Record<string, any>) => rowToBookingView(r));
-      const unread = bookings.filter((b) => b.status !== "cancelled" && !b.seen).length;
-      return { shop, bookings, unread };
+      return loadDashboard(Number((shops[0] as { id: number }).id));
     },
   );
+
+export type OwnerDashAccess = "guest" | "denied" | "ok";
+
+/**
+ * Owner-gated shop dashboard. Resolves the session server-side and only returns
+ * the shop's bookings when the caller is an owner whose shop_id matches the
+ * requested slug. `guest` = no/invalid session, `denied` = non-owner session or
+ * an owner who does not own this shop, `ok` = authorized (with data).
+ */
+export const getOwnerDashboard = createServerFn()
+  .validator((d: { token: string; slug: string }) => d)
+  .handler(
+    async ({ data }): Promise<{ access: OwnerDashAccess; dash?: DashboardData; shopId?: number }> => {
+      const user = await resolveSessionUser(data.token);
+      if (!user) return { access: "guest" };
+      if (user.role !== "owner") return { access: "denied" };
+      const db = sql();
+      const shops = await db`SELECT id FROM arvo.shops WHERE slug = ${data.slug}`;
+      if (shops.length === 0) return { access: "ok", dash: { shop: null, bookings: [], unread: 0 } };
+      const shopId = Number((shops[0] as { id: number }).id);
+      if (user.shopId == null || user.shopId !== shopId) return { access: "denied", shopId };
+      const dash = await loadDashboard(shopId);
+      return { access: "ok", dash, shopId };
+    },
+  );
+
+/**
+ * The shop owned by a logged-in owner (if any). Returns null for guests,
+ * customers, or owners who have not set up a shop yet. Used to route an owner
+ * to their dashboard after logging in.
+ */
+export const getOwnerShop = createServerFn()
+  .validator((d: string) => d)
+  .handler(
+    async ({
+      data: token,
+    }): Promise<{ id: number; slug: string; name: string } | null> => {
+      const user = await resolveSessionUser(token);
+      if (!user || user.role !== "owner" || user.shopId == null) return null;
+      const db = sql();
+      const rows = await db`SELECT id, slug, name FROM arvo.shops WHERE id = ${user.shopId}`;
+      if (rows.length === 0) return null;
+      const r = rows[0] as { id: number; slug: string; name: string };
+      return { id: Number(r.id), slug: r.slug, name: r.name };
+    },
+  );
+
+/**
+ * Create a shop for an already-registered owner (the "add another shop" /
+ * "finish setup" path — registration itself always creates the first shop).
+ * Links the new shop to the owner's account and makes it bookable immediately.
+ */
+export const createShopForOwner = createServerFn()
+  .validator(
+    (d: {
+      token: string;
+      shop: {
+        name: string;
+        address: string;
+        description?: string;
+        photos?: string[];
+        schedule?: ShopSchedule;
+      };
+      services?: ServiceInput[];
+    }) => d,
+  )
+  .handler(
+    async ({ data }): Promise<{ ok: boolean; error?: string; slug?: string; shopId?: number }> => {
+      const user = await resolveSessionUser(data.token);
+      if (!user || user.role !== "owner") {
+        return { ok: false, error: "You must be signed in as a shop owner." };
+      }
+      if (!data.shop.name || !data.shop.address) {
+        return { ok: false, error: "Shop name and address are required." };
+      }
+      const db = sql();
+      const branch = await createOwnerShopBranch(db, {
+        name: data.shop.name,
+        address: data.shop.address,
+        description: data.shop.description,
+        photos: data.shop.photos,
+        schedule: data.shop.schedule,
+        services: data.services,
+      });
+      await db`UPDATE arvo.owners SET shop_id = ${branch.id} WHERE id = ${user.id}`;
+      return { ok: true, slug: branch.slug, shopId: branch.id };
+    },
+  );
+
 
 /** Mark bookings as read (clear the dashboard notification). */
 export const markBookingsSeen = createServerFn()
