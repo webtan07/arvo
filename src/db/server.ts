@@ -3,6 +3,7 @@ import { sql, requireEnv } from "./connection";
 import { ensureSeed } from "./seed";
 import { createPaymentIntent, formatAUD, getStripeConfig } from "./stripe";
 import { sendBookingConfirmationEmail } from "~/lib/mail";
+import { resolveSessionUser } from "./auth";
 
 /** Minimum lead time (ms) before a slot start to allow booking. */
 export const MIN_LEAD_MS = 3 * 60 * 60 * 1000; // 3 hours
@@ -50,6 +51,9 @@ export interface BookingRow {
   paid: boolean;
   payment_intent_id: string | null;
   seen: boolean;
+  customer_id: number | null;
+  /** set once the confirmation email was successfully sent (reminder status) */
+  email_sent_at: string | null;
   created_at: string;
 }
 
@@ -86,6 +90,11 @@ function rowToBookingView(r: Record<string, any>): BookingView {
     paid: Boolean(r.paid),
     payment_intent_id: r.payment_intent_id,
     seen: Boolean(r.seen),
+    customer_id: r.customer_id == null ? null : Number(r.customer_id),
+    email_sent_at:
+      r.email_sent_at == null ? null : r.email_sent_at instanceof Date
+        ? r.email_sent_at.toISOString()
+        : r.email_sent_at,
     created_at: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
     shopName: r.shop_name,
     shopSlug: r.shop_slug,
@@ -481,4 +490,29 @@ export const markBookingsSeen = createServerFn()
       }
     }
     return true;
+  });
+
+/**
+ * "My Bookings" dashboard: all bookings for the logged-in customer (resolved
+ * server-side from the opaque session token, so a caller can only ever see
+ * their own bookings). Returns an empty list for guests / non-customers.
+ */
+export const getMyBookings = createServerFn()
+  .validator((d: string) => d)
+  .handler(async ({ data: token }): Promise<BookingView[]> => {
+    const user = await resolveSessionUser(token);
+    if (!user || user.role !== "customer") return [];
+    const db = sql();
+    const rows = await db`
+      SELECT b.*, s.name AS shop_name, s.slug AS shop_slug,
+             sv.name AS service_name, sv.duration_min, sv.price_cents,
+             sl.starts_at AS slot_starts, sl.ends_at AS slot_ends
+      FROM arvo.bookings b
+      JOIN arvo.shops s ON s.id = b.shop_id
+      LEFT JOIN arvo.services sv ON sv.id = b.service_id
+      LEFT JOIN arvo.slots sl ON sl.id = b.slot_id
+      WHERE b.customer_id = ${user.id}
+      ORDER BY COALESCE(sl.starts_at, b.created_at) DESC
+    `;
+    return rows.map((r: Record<string, any>) => rowToBookingView(r));
   });

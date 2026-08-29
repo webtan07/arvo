@@ -60,6 +60,9 @@ function ConfirmPage() {
       </div>
       <div className="mt-6 flex justify-center gap-3">
         <Link to="/" className="btn">Book another</Link>
+        <Link to="/account" className="btn-outline">
+          My bookings
+        </Link>
         <Link to="/shop/$slug" params={{ slug: booking.shopSlug }} className="btn-outline">
           Back to shop
         </Link>

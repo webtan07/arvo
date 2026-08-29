@@ -37,6 +37,9 @@ function RootDocument() {
               <Link to="/" className="hover:text-brand">
                 Shops
               </Link>
+              <Link to="/account" className="hover:text-brand">
+                My bookings
+              </Link>
               <span className="hidden rounded-full bg-brand px-3 py-1 text-xs font-bold text-white sm:inline">
                 Car detailing · book online
               </span>

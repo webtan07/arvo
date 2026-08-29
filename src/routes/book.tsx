@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { getShop, getSlotGrid, createBooking } from "~/db/server";
 import type { CreateBookingResult, GridSlot, ServiceRow, ShopRow } from "~/db/server";
+import { getSessionUser } from "~/db/auth";
+import type { SessionUser } from "~/db/auth";
+import { getSessionToken } from "~/lib/session";
 import { formatDuration, formatAUD, formatSlotDate, formatTime } from "~/lib/format";
 import PaymentForm from "~/components/PaymentForm";
 
@@ -33,6 +36,26 @@ function BookPage() {
   const [creating, setCreating] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [created, setCreated] = useState<CreateBookingResult | null>(null);
+  const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
+
+  // If a customer is logged in, resolve their session once so we can prefill
+  // the details form and link the new booking to their account.
+  useEffect(() => {
+    if (typeof window === "undefined" || !getSessionToken()) return;
+    let active = true;
+    (async () => {
+      const token = getSessionToken()!;
+      const u = await getSessionUser({ data: token });
+      if (active && u && u.role === "customer") {
+        setSessionUser(u);
+        setName(u.name || "");
+        setEmail(u.email);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!shopSlug) {
@@ -113,6 +136,7 @@ function BookPage() {
         customerName: name,
         customerEmail: email,
         customerPhone: phone,
+        customerId: sessionUser?.id ?? null,
       },
     });
     setCreating(false);
@@ -235,6 +259,23 @@ function BookPage() {
       {step === "details" && (
         <section>
           <h2 className="mb-4 font-display text-xl font-bold">Your details</h2>
+          {sessionUser ? (
+            <p className="mb-4 rounded-xl bg-green-50 p-3 text-sm text-green-800">
+              Signed in as <b>{sessionUser.name || sessionUser.email}</b>. Booking will be
+              linked to your account.{" "}
+              <Link to="/account" className="font-bold underline">
+                My bookings
+              </Link>
+            </p>
+          ) : (
+            <p className="mb-4 rounded-xl bg-surface p-3 text-sm text-ink-soft">
+              Have an account?{" "}
+              <Link to="/login" className="font-bold text-brand hover:text-brand-dark">
+                Log in
+              </Link>{" "}
+              to auto-fill your details and manage bookings. You can also continue as a guest.
+            </p>
+          )}
           <div className="card space-y-4 p-5">
             <div>
               <label className="mb-1 block text-sm font-semibold">Name</label>
