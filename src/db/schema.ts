@@ -27,6 +27,7 @@ export const CREATE_TABLES: string[] = [
     address     TEXT,
     photos      JSONB NOT NULL DEFAULT '[]'::jsonb,
     description TEXT,
+    schedule    JSONB,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
 
@@ -86,6 +87,7 @@ export const CREATE_TABLES: string[] = [
     id            BIGSERIAL PRIMARY KEY,
     email         TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    name          TEXT,
     shop_id       BIGINT REFERENCES ${SCHEMA}.shops(id),
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
@@ -109,6 +111,8 @@ export const ALTER_TABLES: string[] = [
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS seen BOOLEAN NOT NULL DEFAULT false`,
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS customer_id BIGINT`,
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ`,
+  `ALTER TABLE ${SCHEMA}.shops ADD COLUMN IF NOT EXISTS schedule JSONB`,
+  `ALTER TABLE ${SCHEMA}.owners ADD COLUMN IF NOT EXISTS name TEXT`,
 ];
 
 /**

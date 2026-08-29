@@ -1,23 +1,110 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { getDashboard, markBookingsSeen } from "~/db/server";
-import type { BookingView } from "~/db/server";
+import { getOwnerDashboard, markBookingsSeen } from "~/db/server";
+import type { BookingView, DashboardData } from "~/db/server";
+import { logout } from "~/db/auth";
 import { formatCreated, formatDateTime, formatAUD } from "~/lib/format";
+import { clearSessionToken, getSessionToken } from "~/lib/session";
 
 export const Route = createFileRoute("/dashboard/$slug")({
   component: DashboardPage,
-  loader: async ({ params }) => {
-    const dash = await getDashboard({ data: params.slug });
-    return { dash };
-  },
 });
 
+type Access = "loading" | "guest" | "denied" | "ok";
+
 function DashboardPage() {
-  const { dash: initial } = Route.useLoaderData();
-  const [dash, setDash] = useState(initial);
+  const { slug } = Route.useParams();
+  const [access, setAccess] = useState<Access>("loading");
+  const [dash, setDash] = useState<DashboardData | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (!dash.shop) {
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const token = getSessionToken();
+      if (!token) {
+        if (active) setAccess("guest");
+        return;
+      }
+      const res = await getOwnerDashboard({ data: { token, slug } });
+      if (!active) return;
+      if (res.access === "ok") {
+        setDash(res.dash ?? { shop: null, bookings: [], unread: 0 });
+        setAccess("ok");
+      } else if (res.access === "guest") {
+        clearSessionToken();
+        setAccess("guest");
+      } else {
+        setAccess("denied");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [slug]);
+
+  if (access === "loading") {
+    return (
+      <div className="mx-auto max-w-4xl px-5 py-16 text-center text-ink-soft">
+        Checking shop access…
+      </div>
+    );
+  }
+
+  // No (or expired) owner session → clear "shop owner login" prompt.
+  if (access === "guest") {
+    return (
+      <div className="mx-auto max-w-2xl px-5 py-16 text-center">
+        <p className="text-xs uppercase tracking-wide text-ink-soft">Shop dashboard</p>
+        <h1 className="mt-2 font-display text-3xl font-extrabold">Owner login required</h1>
+        <p className="mx-auto mt-3 max-w-md text-ink-soft">
+          This dashboard shows a shop's bookings and notifications. Sign in with
+          the shop owner account to continue.
+        </p>
+        <div className="mt-6 flex flex-wrap justify-center gap-3">
+          <Link to="/owner/login" className="btn">
+            Shop owner login
+          </Link>
+          <Link to="/owner/register" className="btn-outline">
+            Register your shop
+          </Link>
+        </div>
+        <p className="mt-6 text-sm text-ink-soft">
+          <Link to="/" className="text-brand hover:text-brand-dark">
+            ← Browse shops
+          </Link>
+        </p>
+      </div>
+    );
+  }
+
+  // Signed in but not an owner (or owner of a different shop) → access denied.
+  if (access === "denied") {
+    return (
+      <div className="mx-auto max-w-2xl px-5 py-16 text-center">
+        <h1 className="font-display text-3xl font-extrabold">Access denied</h1>
+        <p className="mx-auto mt-3 max-w-md text-ink-soft">
+          Your account doesn't have permission to view this shop's dashboard.
+          Sign in with the shop owner account that owns this shop.
+        </p>
+        <div className="mt-6 flex flex-wrap justify-center gap-3">
+          <Link to="/owner/login" className="btn">
+            Sign in as owner
+          </Link>
+          <ButtonSignOut onDone={() => setAccess("guest")} />
+        </div>
+        <p className="mt-6 text-sm text-ink-soft">
+          <Link to="/" className="text-brand hover:text-brand-dark">
+            ← Browse shops
+          </Link>
+        </p>
+      </div>
+    );
+  }
+
+  // Authorized — render the shop dashboard.
+  const d = dash!;
+  if (!d.shop) {
     return (
       <div className="mx-auto max-w-2xl px-5 py-16 text-center">
         <p className="text-lg font-semibold">Shop not found.</p>
@@ -29,11 +116,13 @@ function DashboardPage() {
     );
   }
 
-  const unreadBookings = dash.bookings.filter((b) => b.status !== "cancelled" && !b.seen);
+  const unreadBookings = d.bookings.filter((b) => b.status !== "cancelled" && !b.seen);
 
   async function refresh() {
-    const next = await getDashboard({ data: dash.shop!.slug });
-    setDash(next);
+    const token = getSessionToken();
+    if (!token) return;
+    const res = await getOwnerDashboard({ data: { token, slug } });
+    if (res.access === "ok" && res.dash) setDash(res.dash);
   }
 
   async function markAllRead() {
@@ -45,18 +134,21 @@ function DashboardPage() {
     setBusy(false);
   }
 
-  const upcoming = dash.bookings.filter((b) => b.status !== "cancelled");
+  const upcoming = d.bookings.filter((b) => b.status !== "cancelled");
 
   return (
     <div className="mx-auto max-w-4xl px-5 py-8">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-wide text-ink-soft">Shop dashboard</p>
-          <h1 className="font-display text-3xl font-extrabold">{dash.shop.name}</h1>
+          <h1 className="font-display text-3xl font-extrabold">{d.shop.name}</h1>
         </div>
-        <Link to="/" className="text-sm font-semibold text-brand hover:underline">
-          ← Directory
-        </Link>
+        <div className="flex flex-wrap items-center gap-3">
+          <Link to="/" className="text-sm font-semibold text-brand hover:underline">
+            ← Directory
+          </Link>
+          <ButtonSignOut onDone={() => setAccess("guest")} />
+        </div>
       </header>
 
       {/* Notifications */}
@@ -64,9 +156,9 @@ function DashboardPage() {
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-display text-lg font-bold">
             Notifications
-            {dash.unread > 0 && (
+            {d.unread > 0 && (
               <span className="ml-2 rounded-full bg-red-500 px-2 py-0.5 text-xs font-bold text-white">
-                {dash.unread} new
+                {d.unread} new
               </span>
             )}
           </h2>
@@ -171,12 +263,35 @@ function DashboardPage() {
       <section className="card mt-6 p-5 text-sm text-ink-soft">
         <h2 className="mb-1 font-display text-lg font-bold text-ink">Availability</h2>
         <p>
-          The shop is open Monday–Saturday, 8am–5pm, with hourly slots. Availability
-          is generated automatically and slots further than 3 hours away are
-          bookable online. Bookings close 3 hours before each slot.
+          Bookable slots are generated automatically from the schedule you set at
+          registration, and slots further than 3 hours away are bookable online.
+          Bookings close 3 hours before each slot.
         </p>
       </section>
     </div>
+  );
+}
+
+function ButtonSignOut({ onDone }: { onDone: () => void }) {
+  return (
+    <button
+      type="button"
+      className="btn-outline"
+      onClick={async () => {
+        const token = getSessionToken();
+        if (token) {
+          try {
+            await logout({ data: token });
+          } catch {
+            // Non-fatal — still clear the local session.
+          }
+        }
+        clearSessionToken();
+        onDone();
+      }}
+    >
+      Sign out
+    </button>
   );
 }
 
