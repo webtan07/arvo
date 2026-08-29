@@ -1,7 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { getBooking } from "~/db/server";
 import { formatDateTime, formatAUD } from "~/lib/format";
-
 export const Route = createFileRoute("/confirm/$id")({
   component: ConfirmPage,
   loader: async ({ params }) => {
@@ -9,10 +8,8 @@ export const Route = createFileRoute("/confirm/$id")({
     return { booking };
   },
 });
-
 function ConfirmPage() {
   const { booking } = Route.useLoaderData();
-
   if (!booking) {
     return (
       <div className="mx-auto max-w-2xl px-5 py-16 text-center">
@@ -21,10 +18,7 @@ function ConfirmPage() {
       </div>
     );
   }
-
   const paidOnline = booking.payment_option === "pay_online" && booking.paid;
-  const payOnDay = booking.payment_option === "pay_on_day";
-
   return (
     <div className="mx-auto max-w-2xl px-5 py-12">
       <div className="card overflow-hidden">
@@ -38,7 +32,6 @@ function ConfirmPage() {
             <span className="font-bold">ARVO-{String(booking.id).padStart(4, "0")}</span>
           </p>
         </div>
-
         <div className="p-6">
           <dl className="space-y-3 text-sm">
             <Row label="Shop" value={booking.shopName} />
@@ -49,36 +42,22 @@ function ConfirmPage() {
             <Row label="Name" value={booking.customer_name} />
             <Row label="Email" value={booking.customer_email} />
             {booking.customer_phone && <Row label="Phone" value={booking.customer_phone} />}
-            <Row
-              label="Payment"
-              value={
-                paidOnline
-                  ? `Paid online (${formatAUD(booking.priceCents ?? 0)})`
-                  : payOnDay
-                    ? "Pay on the day"
-                    : "Payment pending"
-              }
-            />
+            {paidOnline && (
+              <Row label="Payment" value={`Paid online (${formatAUD(booking.priceCents ?? 0)})`} />
+            )}
           </dl>
         </div>
       </div>
-
       <div className="mt-6 rounded-2xl border border-line bg-surface p-5 text-sm text-ink-soft">
-        {payOnDay ? (
-          <p>
-            Nothing was charged today — please settle with the shop on the day of
-            your visit.
-          </p>
-        ) : paidOnline ? (
+        {paidOnline ? (
           <p>Thank you! Your card payment was successful. See you at the shop.</p>
         ) : (
-          <p>Your booking is being processed. We'll confirm shortly.</p>
+          <p>Your payment is being processed — we'll confirm shortly.</p>
         )}
         <p className="mt-2">
           A confirmation email has been sent to <b>{booking.customer_email}</b>.
         </p>
       </div>
-
       <div className="mt-6 flex justify-center gap-3">
         <Link to="/" className="btn">Book another</Link>
         <Link to="/shop/$slug" params={{ slug: booking.shopSlug }} className="btn-outline">
@@ -88,7 +67,6 @@ function ConfirmPage() {
     </div>
   );
 }
-
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start justify-between gap-4 border-b border-line pb-2 last:border-0">

@@ -72,6 +72,32 @@ export const CREATE_TABLES: string[] = [
     notes           TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
+
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA}.customers (
+    id            BIGSERIAL PRIMARY KEY,
+    email         TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    name          TEXT,
+    phone         TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA}.owners (
+    id            BIGSERIAL PRIMARY KEY,
+    email         TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    shop_id       BIGINT REFERENCES ${SCHEMA}.shops(id),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA}.sessions (
+    id           BIGSERIAL PRIMARY KEY,
+    token_hash   TEXT NOT NULL UNIQUE,
+    user_role    TEXT NOT NULL,
+    user_id      BIGINT NOT NULL,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
 ];
 
 // Idempotent column migrations for databases created before these columns existed.
@@ -81,6 +107,8 @@ export const ALTER_TABLES: string[] = [
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT false`,
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS payment_intent_id TEXT`,
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS seen BOOLEAN NOT NULL DEFAULT false`,
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS customer_id BIGINT`,
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ`,
 ];
 
 /**

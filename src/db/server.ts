@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { sql, requireEnv } from "./connection";
 import { ensureSeed } from "./seed";
 import { createPaymentIntent, formatAUD, getStripeConfig } from "./stripe";
+import { sendBookingConfirmationEmail } from "~/lib/mail";
 
 /** Minimum lead time (ms) before a slot start to allow booking. */
 export const MIN_LEAD_MS = 3 * 60 * 60 * 1000; // 3 hours
@@ -173,7 +174,49 @@ export const getAvailableSlots = createServerFn()
     }));
   });
 
-export type PaymentOption = "pay_online" | "pay_on_day";
+export interface GridSlot extends SlotRow {
+  /** true when the slot can be booked right now (open + future by >=3h + free). */
+  available: boolean;
+}
+
+/**
+ * Full slot grid for the booking page: EVERY slot from now out to the seeded
+ * horizon, each with a server-computed `available` flag (is_open AND at least
+ * the 3-hour lead AND not taken by a non-cancelled booking). The UI renders
+ * unavailable (booked / too-soon / closed) slots as visibly disabled. The
+ * `available` computation mirrors the free-slots query in getAvailableSlots, so
+ * the server-side truth that excludes booked + past-too-soon slots is unchanged.
+ */
+export const getSlotGrid = createServerFn()
+  .validator((d: { shopSlug: string }) => d)
+  .handler(async ({ data }): Promise<GridSlot[]> => {
+    await ensureSeed();
+    const db = sql();
+    const shops = await db`SELECT id FROM arvo.shops WHERE slug = ${data.shopSlug}`;
+    if (shops.length === 0) return [];
+    const shopId = Number((shops[0] as { id: number }).id);
+    const cutoff = new Date(Date.now() + MIN_LEAD_MS);
+    const rows = await db`
+      SELECT id, shop_id, starts_at, ends_at, is_open,
+        (starts_at > ${cutoff} AND is_open = true AND NOT EXISTS (
+          SELECT 1 FROM arvo.bookings b WHERE b.slot_id = arvo.slots.id AND b.status <> 'cancelled'
+        )) AS available
+      FROM arvo.slots
+      WHERE shop_id = ${shopId}
+        AND ends_at >= now()
+      ORDER BY starts_at ASC
+    `;
+    return rows.map((r: Record<string, any>) => ({
+      id: Number(r.id),
+      shop_id: Number(r.shop_id),
+      starts_at: new Date(r.starts_at).toISOString(),
+      ends_at: new Date(r.ends_at).toISOString(),
+      is_open: Boolean(r.is_open),
+      available: Boolean(r.available),
+    }));
+  });
+
+export type PaymentOption = "pay_online";
 
 export interface CreateBookingInput {
   shopSlug: string;
@@ -182,7 +225,7 @@ export interface CreateBookingInput {
   customerName: string;
   customerEmail: string;
   customerPhone?: string;
-  paymentOption: PaymentOption;
+  customerId?: number | null;
 }
 
 export interface CreateBookingResult {
@@ -240,14 +283,13 @@ export const createBooking = createServerFn()
       `;
       if (taken.length > 0) return { ok: false, error: "Sorry, that slot was just taken. Please choose another." };
 
-      const paymentOption: PaymentOption =
-        data.paymentOption === "pay_online" ? "pay_online" : "pay_on_day";
-
+      // Every booking pays now: create the PaymentIntent up front when real
+      // Stripe keys are configured (otherwise the UI runs in demo mode).
+      const paymentOption: PaymentOption = "pay_online";
       let paymentIntentId: string | null = null;
       const stripe = getStripeConfig();
 
-      // For pay_online WITH real Stripe keys, create the PaymentIntent up front.
-      if (paymentOption === "pay_online" && stripe.hasKeys) {
+      if (stripe.hasKeys) {
         const pi = await createPaymentIntent({
           amountCents: priceCents,
           currency: "aud",
@@ -259,13 +301,13 @@ export const createBooking = createServerFn()
         paymentIntentId = pi.id;
       }
 
-      const status = paymentOption === "pay_online" ? "awaiting_payment" : "confirmed";
+      const status = "awaiting_payment";
 
       const inserted = await db`
         INSERT INTO arvo.bookings
-          (shop_id, service_id, slot_id, customer_name, customer_email, customer_phone, status, payment_option, paid, payment_intent_id)
+          (shop_id, service_id, slot_id, customer_id, customer_name, customer_email, customer_phone, status, payment_option, paid, payment_intent_id)
         VALUES
-          (${shopId}, ${serviceId}, ${slotId}, ${data.customerName}, ${data.customerEmail}, ${data.customerPhone || null}, ${status}, ${paymentOption}, false, ${paymentIntentId})
+          (${shopId}, ${serviceId}, ${slotId}, ${data.customerId ?? null}, ${data.customerName}, ${data.customerEmail}, ${data.customerPhone || null}, ${status}, ${paymentOption}, false, ${paymentIntentId})
         RETURNING *
       `;
       const booking = rowToBookingView(inserted[0] as Record<string, any>);
@@ -312,13 +354,67 @@ export const markBookingPaid = createServerFn()
   .validator((d: number) => d)
   .handler(async ({ data: id }) => {
     const db = sql();
-    await db`
+    const updated = await db`
       UPDATE arvo.bookings
       SET status = 'confirmed', paid = true
       WHERE id = ${id} AND status = 'awaiting_payment'
+      RETURNING id
     `;
+    // Payment confirmed → send the confirmation email (bounded, non-blocking).
+    // Booking success is never dependent on mail: on failure we only log.
+    if (updated.length > 0) {
+      await sendBookingConfirmationEmailForBooking(id);
+    }
     return true;
   });
+
+/**
+ * Build + send the booking confirmation email for a confirmed booking, then
+ * stamp `email_sent_at` on success. Never throws — failures are logged and the
+ * booking is unaffected.
+ */
+async function sendBookingConfirmationEmailForBooking(bookingId: number): Promise<void> {
+  try {
+    const db = sql();
+    const rows = await db`
+      SELECT b.id, b.customer_email,
+             s.name AS shop_name, s.address AS shop_address,
+             sv.name AS service_name,
+             sl.starts_at AS slot_starts
+      FROM arvo.bookings b
+      JOIN arvo.shops s ON s.id = b.shop_id
+      LEFT JOIN arvo.services sv ON sv.id = b.service_id
+      LEFT JOIN arvo.slots sl ON sl.id = b.slot_id
+      WHERE b.id = ${bookingId}
+    `;
+    const r = rows[0] as Record<string, any> | undefined;
+    if (!r || !r.customer_email) return;
+
+    const when = new Date(r.slot_starts).toLocaleString("en-AU", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+
+    await sendBookingConfirmationEmail({
+      to: r.customer_email,
+      reference: `ARVO-${String(Number(r.id)).padStart(4, "0")}`,
+      shopName: r.shop_name,
+      serviceName: r.service_name || "Car detailing",
+      when,
+      address: r.shop_address || null,
+    });
+
+    await db`UPDATE arvo.bookings SET email_sent_at = now() WHERE id = ${bookingId}`;
+  } catch (e) {
+    console.error(
+      `[arvo:mail] confirmation email failed for booking ${bookingId}:`,
+      e instanceof Error ? e.message : e,
+    );
+  }
+}
 
 /** Fetch one booking (for the confirmation page). */
 export const getBooking = createServerFn()
