@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { loginOwner } from "~/db/auth";
 import { getOwnerShop } from "~/db/server";
 import { setSessionToken } from "~/lib/session";
+import { useSession } from "~/lib/useSession";
 
 export const Route = createFileRoute("/owner/login")({
   component: OwnerLoginPage,
@@ -10,11 +11,40 @@ export const Route = createFileRoute("/owner/login")({
 
 function OwnerLoginPage() {
   const navigate = useNavigate();
+  const session = useSession();
+  const [checking, setChecking] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [noShop, setNoShop] = useState(false);
+
+  // An owner who is ALREADY logged in should not see the login form — send them
+  // straight to their shop dashboard (slug resolved server-side via getOwnerShop,
+  // never trusted from the client). Guests and customers stay on the form.
+  useEffect(() => {
+    if (session.status === "loading") return;
+    if (session.status === "owner") {
+      if (session.slug) {
+        navigate({ to: "/dashboard/$slug", params: { slug: session.slug } });
+      } else {
+        // Owner with no shop yet (edge) — point them at shop setup.
+        navigate({ to: "/owner/register" });
+      }
+      return;
+    }
+    setChecking(false);
+  }, [session, navigate]);
+
+  if (checking && session.status !== "owner") {
+    return (
+      <div className="mx-auto max-w-md px-5 py-12 text-center text-ink-soft">
+        <p className="text-xs uppercase tracking-wide text-ink-soft">Shop owners</p>
+        <h1 className="mt-2 font-display text-2xl font-extrabold">Owner login</h1>
+        <p className="mt-6">Checking your session…</p>
+      </div>
+    );
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

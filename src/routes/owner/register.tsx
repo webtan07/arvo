@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { registerOwner, type ShopSchedule } from "~/db/auth";
 import { setSessionToken } from "~/lib/session";
+import { useSession } from "~/lib/useSession";
 
 export const Route = createFileRoute("/owner/register")({
   component: OwnerRegisterPage,
@@ -26,6 +27,7 @@ const HOUR_LABELS = (() => {
 
 function OwnerRegisterPage() {
   const navigate = useNavigate();
+  const session = useSession();
   const [step, setStep] = useState(0);
 
   // Step 1 — identity
@@ -54,6 +56,17 @@ function OwnerRegisterPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const steps = ["Your details", "Shop & hours", "Services", "Photos"];
+
+  // An owner who is ALREADY signed in shouldn't be asked to register again — send
+  // them to their shop dashboard (slug resolved server-side). An owner whose shop
+  // hasn't been set up yet stays here (this IS the setup page). Guests and
+  // customers see the form as normal.
+  useEffect(() => {
+    if (session.status === "loading") return;
+    if (session.status === "owner" && session.slug) {
+      navigate({ to: "/dashboard/$slug", params: { slug: session.slug } });
+    }
+  }, [session, navigate]);
 
   function toggleDay(d: number) {
     setOpenDays((prev) =>
