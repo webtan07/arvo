@@ -6,6 +6,7 @@
 // NOTE: Arvo deliberately binds to PORT (default 3102), never 3000 (WDA site),
 // 3100 (IG app), or 3101 (FED).
 import handler from "./dist/server/server.js";
+import { startScheduler } from "./src/scheduler";
 
 const PORT = Number(process.env.PORT) || 3102;
 const HOST = "0.0.0.0";
@@ -27,3 +28,5 @@ Bun.serve({
 });
 
 console.log(`Arvo serving on http://${HOST}:${String(PORT)}`);
+
+startScheduler();
