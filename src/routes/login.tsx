@@ -92,6 +92,18 @@ function LoginPage() {
         </p>
       </div>
 
+      <div className="relative my-7 text-center">
+        <span className="px-3 text-xs font-semibold uppercase tracking-wide text-ink-soft">
+          Different workflow?
+        </span>
+      </div>
+      <Link
+        to="/owner/login"
+        className="btn w-full border border-brand/40 bg-transparent text-brand hover:bg-brand/10"
+      >
+        I'm a shop owner — log in to my dashboard →
+      </Link>
+
       <p className="mt-6 text-center text-sm text-ink-soft">
         <Link to="/" className="hover:text-brand">
           ← Browse shops
