@@ -31,6 +31,13 @@ export const SCHEMA = "arvo";
  *                          initiate this state (server-enforced).
  *   'rescheduled'          customer chose RESCHEDULE: same booking record +
  *                          payment, moved to a new slot for the same service.
+ *   'completed'            final state (Phase B part 3) — the mobile business
+ *                          owner marked the job done from their dashboard for a
+ *                          booking that was 'confirmed' or 'rescheduled'. The
+ *                          owner uploads a required photo of the serviced
+ *                          vehicle at the same time; the customer is emailed
+ *                          the photo + a review link. 'completed' bookings are
+ *                          no longer actionable (no cancel / no re-complete).
  *   'cancelled'            final state. Reached ONLY via the customer choosing
  *                          "cancel for credit" after an owner cancellation
  *                          (credit row issued, no card refund).
@@ -43,6 +50,12 @@ export const SCHEMA = "arvo";
  *   'credited'  final state when the booking is cancelled-for-credit — the
  *               money was NOT refunded to the card; it became an arvo.credits
  *               row for the customer.
+ *
+ * Service completion (Phase B part 3) does NOT change transactions.status: the
+ * money lifecycle stays 'paid' (nothing about the money changed — it moved when
+ * the card charge succeeded). Completion is recorded with `completed_at` on BOTH
+ * the booking row and the transaction row, so analytics/history can split
+ * 'delivered' vs 'paid' while payment state stays exact.
  *
  * arvo.credits.status:
  *   'active' -> 'used' (applied at checkout) | 'expired' (forfeited, 90 days)
@@ -210,6 +223,28 @@ export const ALTER_TABLES: string[] = [
   // Transactions track the credit too: total_cents stays the NET cash that moved
   // (service + fee − credit); credit_applied_cents records the applied amount.
   `ALTER TABLE ${SCHEMA}.transactions ADD COLUMN IF NOT EXISTS credit_applied_cents INTEGER NOT NULL DEFAULT 0`,
+  // Phase B part 3 (service completion + vehicle photo + transaction history):
+  //   completion_photo_path     — data URL ("data:image/jpeg;base64,…") of the
+  //                               required photo of the serviced vehicle the
+  //                               owner uploads when completing the job. Stored
+  //                               ON the booking so it cascades with it; shown
+  //                               in <img> and embedded inline in the customer
+  //                               email. Deliberately a data URL: this TanStack
+  //                               version has no HTTP GET endpoint mechanism
+  //                               (api/ routes are server-fn modules, POST via
+  //                               /_serverFn), so a hosted image URL isn't
+  //                               available — the data URL keeps the "path"
+  //                               reference on the booking as specified.
+  //   completed_at              — when the owner marked the job complete.
+  //   completion_email_sent_at  — stamped when the completion email (photo +
+  //                               review link) was successfully sent; non-null
+  //                               means the customer was notified.
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS completion_photo_path TEXT`,
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ`,
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS completion_email_sent_at TIMESTAMPTZ`,
+  // Completion timestamp on the ledger too — money state ('paid') unchanged, but
+  // the history view + future analytics split delivered vs merely-paid.
+  `ALTER TABLE ${SCHEMA}.transactions ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ`,
   `ALTER TABLE ${SCHEMA}.shops ADD COLUMN IF NOT EXISTS schedule JSONB`,
   `ALTER TABLE ${SCHEMA}.owners ADD COLUMN IF NOT EXISTS name TEXT`,
   // Password-reset: a SHA-256 hash of the raw reset token (never the raw token)
