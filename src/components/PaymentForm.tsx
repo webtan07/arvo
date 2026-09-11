@@ -15,9 +15,13 @@ export interface PaymentInfo {
   serviceCents?: number;
   /** Stripe fee surcharge in cents */
   feeCents?: number;
-  /** total carded in cents (service + fee) */
+  /** full total in cents (service + fee) — the booking's value */
   totalCents?: number;
-  /** formatted total, e.g. "A$26.03" */
+  /** credit applied at checkout (0/undefined when none) */
+  creditAppliedCents?: number;
+  /** amount carded in cents = totalCents − creditAppliedCents */
+  chargedCents?: number;
+  /** formatted total/charged, e.g. "A$26.03" (what the customer pays now) */
   amountDisplay: string;
   /** fee rate summary, e.g. "2.9% + A$0.30" */
   rateLabel?: string;
@@ -53,14 +57,17 @@ export default function PaymentForm({ payment, bookingId, onPaid }: Props) {
   );
 }
 /**
- * Transparent price breakdown: Service · Stripe fee · Total. Rendered above the
- * card form in both live and demo modes so the customer sees exactly what they
- * are charged before the card is submitted.
+ * Transparent price breakdown: Service · Stripe fee · (Credit applied) · Total
+ * due. Rendered above the card form in both live and demo modes so the customer
+ * sees exactly what they are charged before the card is submitted. When credit
+ * was applied, "Total due" is the charged amount (total − credit).
  */
 function AmountBreakdown({ payment }: { payment: PaymentInfo }) {
   if (payment.serviceCents == null || payment.feeCents == null || payment.totalCents == null) {
     return null;
   }
+  const credit = payment.creditAppliedCents ?? 0;
+  const totalDue = payment.chargedCents ?? payment.totalCents;
   return (
     <div className="rounded-xl border border-line bg-surface p-4 text-sm">
       <div className="flex items-center justify-between">
@@ -71,9 +78,15 @@ function AmountBreakdown({ payment }: { payment: PaymentInfo }) {
         <dt className="text-ink-soft">Stripe fee{payment.rateLabel ? ` (${payment.rateLabel})` : ""}</dt>
         <dd className="font-semibold">{formatAUD(payment.feeCents)}</dd>
       </div>
+      {credit > 0 && (
+        <div className="mt-1.5 flex items-center justify-between">
+          <dt className="text-ink-soft">Credit applied</dt>
+          <dd className="font-semibold text-brand">−{formatAUD(credit)}</dd>
+        </div>
+      )}
       <div className="mt-1.5 flex items-center justify-between border-t border-line pt-1.5">
         <dt className="font-bold text-ink">Total due</dt>
-        <dd className="font-display font-extrabold text-brand">{formatAUD(payment.totalCents)}</dd>
+        <dd className="font-display font-extrabold text-brand">{formatAUD(totalDue)}</dd>
       </div>
     </div>
   );

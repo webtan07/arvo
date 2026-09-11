@@ -66,28 +66,35 @@ export interface BookingAmounts {
   serviceCents: number;
   feeCents: number;
   totalCents: number;
+  /** credit applied at checkout (0 when none) — total shown is totalCents − credit */
+  creditAppliedCents?: number;
 }
 
 export function formatAudCents(cents: number): string {
-  return `A$${(cents / 100).toFixed(2)}`;
+  return `A${(cents / 100).toFixed(2)}`;
 }
 
-/** Price-breakdown rows for the receipt/owner emails (Service / Stripe fee / Total). */
+/** Price-breakdown rows for the receipt/owner emails (Service / Stripe fee / [Credit] / Total). */
 function amountRowsHtml(amounts?: BookingAmounts): string {
   if (!amounts) return "";
+  const credit = amounts.creditAppliedCents ?? 0;
+  const total = amounts.totalCents - credit;
   return `
     <tr><td style="padding:6px 0;color:#6b7280;">Service</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${formatAudCents(amounts.serviceCents)}</td></tr>
     <tr><td style="padding:6px 0;color:#6b7280;">Stripe fee</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${formatAudCents(amounts.feeCents)}</td></tr>
-    <tr><td style="padding:6px 0;color:#6b7280;border-top:1px solid #FDE1BC;">Total paid</td><td style="padding:6px 0;text-align:right;font-weight:bold;border-top:1px solid #FDE1BC;color:#B45309;">${formatAudCents(amounts.totalCents)}</td></tr>
+    ${credit > 0 ? `<tr><td style="padding:6px 0;color:#6b7280;">Credit applied</td><td style="padding:6px 0;text-align:right;font-weight:bold;color:#B45309;">−${formatAudCents(credit)}</td></tr>` : ""}
+    <tr><td style="padding:6px 0;color:#6b7280;border-top:1px solid #FDE1BC;">Total paid</td><td style="padding:6px 0;text-align:right;font-weight:bold;border-top:1px solid #FDE1BC;color:#B45309;">${formatAudCents(total)}</td></tr>
   `.trim();
 }
 
 function amountRowsText(amounts?: BookingAmounts): string {
   if (!amounts) return "";
+  const credit = amounts.creditAppliedCents ?? 0;
+  const total = amounts.totalCents - credit;
   return `
 Service:   ${formatAudCents(amounts.serviceCents)}
 Stripe fee: ${formatAudCents(amounts.feeCents)}
-Total paid: ${formatAudCents(amounts.totalCents)}
+${credit > 0 ? `Credit applied: −${formatAudCents(credit)}\n` : ""}Total paid: ${formatAudCents(total)}
   `.trim();
 }
 
@@ -361,6 +368,268 @@ If you didn't request this, you can safely ignore this email — your password w
       from: `"Arvo" <${fromUser}>`,
       to: data.to,
       subject: "Reset your Arvo password",
+      html,
+      text,
+    }),
+    SEND_TIMEOUT_MS,
+  );
+}
+
+export interface BookingCancelledByOwnerData {
+  to: string;
+  reference: string;
+  shopName: string;
+  serviceName: string;
+  /** Original appointment time (already formatted en-AU), or null when unknown. */
+  when: string | null;
+  /** Absolute link to /reschedule/<id>?token=… (customer picks a new slot). */
+  rescheduleUrl: string;
+  /** Absolute link to the same page with &action=credit (cancel for credit). */
+  creditUrl: string;
+  /** Booking value in cents (service + fee) — the credit the customer would get. */
+  amountCents: number;
+}
+
+/**
+ * Send the customer the "your appointment was cancelled by the mobile business"
+ * email with EXACTLY two options: reschedule (new slot, same payment) or cancel
+ * for credit (no card refund — 90-day credit). Throws on failure — callers MUST
+ * guard with try/catch (see cancelBookingByOwner).
+ */
+export async function sendBookingCancelledByOwnerEmail(
+  data: BookingCancelledByOwnerData,
+): Promise<unknown> {
+  const fromUser = senderEmail();
+  if (!fromUser || !process.env.EMAIL_APP_PASSWORD) {
+    throw new Error("EMAIL_USER / EMAIL_APP_PASSWORD not set — cannot send cancellation email.");
+  }
+  const when = data.when ? `<tr><td style="padding:6px 0;color:#6b7280;">Was booked for</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.when}</td></tr>` : "";
+  const credit = formatAudCents(data.amountCents);
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto;padding:24px;">
+      <p style="font-size:13px;letter-spacing:.15em;color:#B45309;text-transform:uppercase;font-weight:bold;">Arvo · Car Detailing</p>
+      <h1 style="font-size:24px;line-height:1.3;margin:8px 0 4px;">Your appointment was cancelled</h1>
+      <p style="font-size:15px;color:#4b5563;">The mobile business couldn't make this time, so your appointment for <b>${data.serviceName}</b> at <b>${data.shopName}</b> is no longer happening. Your payment is safe — you choose what happens next:</p>
+      <div style="background:#FFF7ED;border:1px solid #FDE1BC;border-radius:14px;padding:20px;margin:20px 0;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr><td style="padding:6px 0;color:#6b7280;">Reference</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.reference}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Service</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.serviceName}</td></tr>
+          ${when}
+        </table>
+      </div>
+      <div style="margin:20px 0;">
+        <p style="margin:0 0 10px;"><a href="${data.rescheduleUrl}" style="display:inline-block;background:#B45309;color:#fff;padding:12px 22px;border-radius:10px;text-decoration:none;font-weight:bold;">Reschedule — pick a new time</a></p>
+        <p style="margin:0;font-size:13px;color:#4b5563;">Same service, same business, keep your payment. The business is notified of your new time.</p>
+      </div>
+      <div style="margin:14px 0 0;border-top:1px solid #FDE1BC;padding-top:14px;">
+        <p style="margin:0 0 10px;"><a href="${data.creditUrl}" style="display:inline-block;border:2px solid #B45309;color:#B45309;padding:10px 20px;border-radius:10px;text-decoration:none;font-weight:bold;">Cancel for credit — ${credit}</a></p>
+        <p style="margin:0;font-size:13px;color:#4b5563;">No card refund — ${credit} is held as credit for your next booking, valid for 90 days.</p>
+      </div>
+      <p style="font-size:13px;color:#9ca3af;margin-top:24px;">You can also choose from your account page any time before you decide.</p>
+    </div>
+  `.trim();
+  const text = `
+Arvo · Car Detailing
+
+Your appointment was cancelled by the mobile business (${data.serviceName} at ${data.shopName}${data.when ? `, was ${data.when}` : ""}). Your payment is safe — choose what happens next:
+
+RESCHEDULE — pick a new time (same service, keep your payment):
+${data.rescheduleUrl}
+
+CANCEL FOR CREDIT — ${credit} held as credit for 90 days, no card refund:
+${data.creditUrl}
+
+Reference: ${data.reference}
+  `.trim();
+  const transporter = createTransporter();
+  return await withTimeout(
+    transporter.sendMail({
+      from: `"Arvo" <${fromUser}>`,
+      to: data.to,
+      subject: `Your Arvo appointment was cancelled — ${data.reference}`,
+      html,
+      text,
+    }),
+    SEND_TIMEOUT_MS,
+  );
+}
+
+export interface BookingRescheduledData {
+  to: string;
+  reference: string;
+  shopName: string;
+  serviceName: string;
+  /** New time, already formatted en-AU. */
+  when: string;
+}
+
+/**
+ * Customer confirmation after a successful reschedule (same booking, new time).
+ * Throws on failure — callers MUST guard with try/catch.
+ */
+export async function sendBookingRescheduledEmail(
+  data: BookingRescheduledData,
+): Promise<unknown> {
+  const fromUser = senderEmail();
+  if (!fromUser || !process.env.EMAIL_APP_PASSWORD) {
+    throw new Error("EMAIL_USER / EMAIL_APP_PASSWORD not set — cannot send reschedule email.");
+  }
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto;padding:24px;">
+      <p style="font-size:13px;letter-spacing:.15em;color:#B45309;text-transform:uppercase;font-weight:bold;">Arvo · Car Detailing</p>
+      <h1 style="font-size:24px;line-height:1.3;margin:8px 0 4px;">You're rescheduled ✅</h1>
+      <p style="font-size:15px;color:#4b5563;">Your payment carried over — here's the new time:</p>
+      <div style="background:#FFF7ED;border:1px solid #FDE1BC;border-radius:14px;padding:20px;margin:20px 0;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr><td style="padding:6px 0;color:#6b7280;">Reference</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.reference}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Detailer</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.shopName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Service</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.serviceName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">New time</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.when}</td></tr>
+        </table>
+      </div>
+      <p style="font-size:13px;color:#9ca3af;">We'll email you 1 day before and text you 1 hour before your appointment.</p>
+    </div>
+  `.trim();
+  const text = `
+Arvo · Car Detailing
+You're rescheduled ✅
+
+Reference: ${data.reference}
+Detailer:  ${data.shopName}
+Service:   ${data.serviceName}
+New time:  ${data.when}
+  `.trim();
+  const transporter = createTransporter();
+  return await withTimeout(
+    transporter.sendMail({
+      from: `"Arvo" <${fromUser}>`,
+      to: data.to,
+      subject: `Your Arvo booking is rescheduled — ${data.reference}`,
+      html,
+      text,
+    }),
+    SEND_TIMEOUT_MS,
+  );
+}
+
+export interface OwnerRescheduleNotificationData {
+  to: string;
+  ownerName: string | null;
+  reference: string;
+  shopName: string;
+  serviceName: string;
+  /** New time, already formatted en-AU. */
+  when: string;
+  customerName: string;
+}
+
+/**
+ * Tell the business owner their cancelled booking was rescheduled to a new
+ * time by the customer. Throws on failure — callers MUST guard with try/catch.
+ */
+export async function sendOwnerRescheduleNotificationEmail(
+  data: OwnerRescheduleNotificationData,
+): Promise<unknown> {
+  const fromUser = senderEmail();
+  if (!fromUser || !process.env.EMAIL_APP_PASSWORD) {
+    throw new Error("EMAIL_USER / EMAIL_APP_PASSWORD not set — cannot send reschedule email.");
+  }
+  const greeting = data.ownerName ? `Hi ${data.ownerName},` : "Hi,";
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto;padding:24px;">
+      <p style="font-size:13px;letter-spacing:.15em;color:#B45309;text-transform:uppercase;font-weight:bold;">Arvo · Car Detailing</p>
+      <h1 style="font-size:24px;line-height:1.3;margin:8px 0 4px;">Rescheduled — ${data.reference}</h1>
+      <p style="font-size:15px;color:#4b5563;">${greeting} The customer whose booking you cancelled chose a new time. Payment carried over:</p>
+      <div style="background:#FFF7ED;border:1px solid #FDE1BC;border-radius:14px;padding:20px;margin:20px 0;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr><td style="padding:6px 0;color:#6b7280;">Customer</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.customerName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Service</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.serviceName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">New time</td><td style="padding:6px 0;text-align:right;font-weight:bold;color:#B45309;">${data.when}</td></tr>
+        </table>
+      </div>
+      <p style="font-size:13px;color:#9ca3af;">Manage this booking from your Arvo dashboard.</p>
+    </div>
+  `.trim();
+  const text = `
+Arvo · Car Detailing
+Rescheduled — ${data.reference}
+
+${greeting} The customer whose booking you cancelled chose a new time.
+
+Customer:  ${data.customerName}
+Service:   ${data.serviceName}
+New time:  ${data.when}
+  `.trim();
+  const transporter = createTransporter();
+  return await withTimeout(
+    transporter.sendMail({
+      from: `"Arvo" <${fromUser}>`,
+      to: data.to,
+      subject: `Rescheduled booking — ${data.reference}`,
+      html,
+      text,
+    }),
+    SEND_TIMEOUT_MS,
+  );
+}
+
+export interface CreditIssuedData {
+  to: string;
+  reference: string;
+  shopName: string;
+  serviceName: string;
+  /** Credit amount in cents. */
+  amountCents: number;
+  /** Expiry of the credit (Date). */
+  expiresAt: Date;
+}
+
+/**
+ * Customer confirmation that their cancelled booking became a credit (NO card
+ * refund). Throws on failure — callers MUST guard with try/catch.
+ */
+export async function sendCreditIssuedEmail(data: CreditIssuedData): Promise<unknown> {
+  const fromUser = senderEmail();
+  if (!fromUser || !process.env.EMAIL_APP_PASSWORD) {
+    throw new Error("EMAIL_USER / EMAIL_APP_PASSWORD not set — cannot send credit email.");
+  }
+  const credit = formatAudCents(data.amountCents);
+  const expiry = data.expiresAt.toLocaleString("en-AU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto;padding:24px;">
+      <p style="font-size:13px;letter-spacing:.15em;color:#B45309;text-transform:uppercase;font-weight:bold;">Arvo · Car Detailing</p>
+      <h1 style="font-size:24px;line-height:1.3;margin:8px 0 4px;">You now have ${credit} credit</h1>
+      <p style="font-size:15px;color:#4b5563;">Instead of a card refund, the amount you paid for <b>${data.serviceName}</b> at <b>${data.shopName}</b> (${data.reference}) is now credit on your account.</p>
+      <div style="background:#FFF7ED;border:1px solid #FDE1BC;border-radius:14px;padding:20px;margin:20px 0;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr><td style="padding:6px 0;color:#6b7280;">Credit amount</td><td style="padding:6px 0;text-align:right;font-weight:bold;color:#B45309;">${credit}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Expires</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${expiry}</td></tr>
+        </table>
+      </div>
+      <p style="font-size:14px;color:#4b5563;">Next time you book, you'll see this credit at checkout — tick the box to apply it to your booking. Unused credit expires on ${expiry}.</p>
+    </div>
+  `.trim();
+  const text = `
+Arvo · Car Detailing
+You now have ${credit} credit
+
+Instead of a card refund, the amount you paid for ${data.serviceName} at ${data.shopName} (${data.reference}) is now credit on your account.
+
+Credit amount: ${credit}
+Expires:       ${expiry}
+
+At your next booking, tick the credit option at checkout to apply it. Unused credit expires on ${expiry}.
+  `.trim();
+  const transporter = createTransporter();
+  return await withTimeout(
+    transporter.sendMail({
+      from: `"Arvo" <${fromUser}>`,
+      to: data.to,
+      subject: `You have ${credit} Arvo credit — ${data.reference}`,
       html,
       text,
     }),

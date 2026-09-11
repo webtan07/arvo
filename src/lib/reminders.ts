@@ -63,7 +63,7 @@ async function loadDueBookings(): Promise<BookingRow[]> {
     JOIN arvo.shops s ON s.id = b.shop_id
     LEFT JOIN arvo.services sv ON sv.id = b.service_id
     LEFT JOIN arvo.slots sl ON sl.id = b.slot_id
-    WHERE b.status <> 'cancelled'
+    WHERE b.status NOT IN ('cancelled', 'cancellation_pending')
       AND sl.starts_at IS NOT NULL
       AND sl.starts_at > now()
     ORDER BY sl.starts_at ASC

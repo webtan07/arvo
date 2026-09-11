@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { getOwnerDashboard, markBookingsSeen } from "~/db/server";
+import { getOwnerDashboard, markBookingsSeen, cancelBookingByOwner } from "~/db/server";
 import type { BookingView, DashboardData } from "~/db/server";
 import { logout } from "~/db/auth";
 import { formatCreated, formatDateTime, formatAUD } from "~/lib/format";
@@ -17,6 +17,11 @@ function DashboardPage() {
   const [access, setAccess] = useState<Access>("loading");
   const [dash, setDash] = useState<DashboardData | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Owner cancellation state: the booking awaiting confirmation + busy flag.
+  const [cancelTarget, setCancelTarget] = useState<BookingView | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelErr, setCancelErr] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -116,7 +121,9 @@ function DashboardPage() {
     );
   }
 
-  const unreadBookings = d.bookings.filter((b) => b.status !== "cancelled" && !b.seen);
+  const unreadBookings = d.bookings.filter(
+    (b) => !["cancelled", "cancellation_pending"].includes(b.status) && !b.seen,
+  );
 
   async function refresh() {
     const token = getSessionToken();
@@ -134,7 +141,27 @@ function DashboardPage() {
     setBusy(false);
   }
 
-  const upcoming = d.bookings.filter((b) => b.status !== "cancelled");
+  // Active bookings only — 'cancellation_pending' (awaiting the customer's
+  // choice) and 'cancelled' are shown in their own sections below.
+  const ACTIVE = ["pending", "awaiting_payment", "confirmed", "rescheduled"];
+  const upcoming = d.bookings.filter((b) => ACTIVE.includes(b.status));
+  const awaitingDecision = d.bookings.filter((b) => b.status === "cancellation_pending");
+  const cancelled = d.bookings.filter((b) => b.status === "cancelled");
+
+  async function confirmCancelBooking(b: BookingView) {
+    const token = getSessionToken();
+    if (!token || !b) return;
+    setCancelling(true);
+    setCancelErr(null);
+    const res = await cancelBookingByOwner({ data: { token, bookingId: b.id, slug } });
+    setCancelling(false);
+    if (!res.ok || !res.booking) {
+      setCancelErr(res.error || "Couldn't cancel this booking. Please try again.");
+      return;
+    }
+    setCancelTarget(null);
+    await refresh();
+  }
 
   return (
     <div className="mx-auto max-w-4xl px-5 py-8">
@@ -232,6 +259,7 @@ function DashboardPage() {
                   <th className="py-2 pr-3">When</th>
                   <th className="py-2 pr-3">Payment</th>
                   <th className="py-2 pr-3">Booked</th>
+                  <th className="py-2 pr-3"></th>
                 </tr>
               </thead>
               <tbody>
@@ -251,13 +279,131 @@ function DashboardPage() {
                     <td className="py-3 pr-3 text-xs text-ink-soft">
                       {formatCreated(b.created_at)}
                     </td>
+                    <td className="py-3 pr-3 text-right">
+                      <button
+                        type="button"
+                        className="rounded-lg border border-red-200 px-2.5 py-1 text-xs font-bold text-red-600 transition hover:border-red-400 hover:bg-red-50"
+                        onClick={() => {
+                          setCancelErr(null);
+                          setCancelTarget(b);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
+
+        {/* Owner cancellation — confirmation step (states what the customer is offered) */}
+        {cancelTarget && (
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
+            <p className="font-bold text-red-700">
+              Cancel booking ARVO-{String(cancelTarget.id).padStart(4, "0")}?
+            </p>
+            <p className="mt-1 text-sm text-red-800">
+              {cancelTarget.customer_name} · {cancelTarget.serviceName || "Service"}
+              {cancelTarget.slotStartsAt ? ` · ${formatDateTime(cancelTarget.slotStartsAt)}` : ""}
+            </p>
+            <p className="mt-2 text-sm text-red-800">
+              The customer will be emailed immediately and offered{" "}
+              <b>two options: reschedule to a new time (payment carried over)</b>{" "}
+              or <b>cancel for credit</b> (the amount paid becomes a 90-day credit
+              balance — no card refund).
+            </p>
+            {cancelErr && <p className="mt-2 text-sm font-semibold text-red-700">{cancelErr}</p>}
+            <div className="mt-3 flex flex-wrap gap-3">
+              <button
+                type="button"
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-red-700 disabled:opacity-50"
+                disabled={cancelling}
+                onClick={() => confirmCancelBooking(cancelTarget)}
+              >
+                {cancelling ? "Cancelling…" : "Yes, cancel this booking"}
+              </button>
+              <button
+                type="button"
+                className="btn-outline"
+                disabled={cancelling}
+                onClick={() => {
+                  setCancelTarget(null);
+                  setCancelErr(null);
+                }}
+              >
+                Keep booking
+              </button>
+            </div>
+          </div>
+        )}
       </section>
+
+      {/* Cancelled by the owner — customer is deciding */}
+      {awaitingDecision.length > 0 && (
+        <section className="card mt-6 p-5">
+          <h2 className="mb-3 font-display text-lg font-bold">
+            Awaiting customer decision{" "}
+            <span className="text-sm font-normal text-ink-soft">({awaitingDecision.length})</span>
+          </h2>
+          <p className="mb-3 text-sm text-ink-soft">
+            You cancelled these bookings — the customer was emailed the choice to
+            reschedule or take credit, and can also choose from their account page.
+          </p>
+          <ul className="space-y-2">
+            {awaitingDecision.map((b) => (
+              <li
+                key={b.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm"
+              >
+                <div>
+                  <p className="font-bold">
+                    {b.serviceName || "Service"} · ARVO-{String(b.id).padStart(4, "0")}
+                  </p>
+                  <p className="text-xs text-ink-soft">
+                    {b.customer_name} · {b.slotStartsAt ? formatDateTime(b.slotStartsAt) : "—"}
+                    {b.cancelled_at ? ` · cancelled ${formatCreated(b.cancelled_at)}` : ""}
+                  </p>
+                </div>
+                <span className="chip bg-amber-100 text-amber-700">
+                  Customer choosing
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* Cancelled (resolved: customer took credit) */}
+      {cancelled.length > 0 && (
+        <section className="card mt-6 p-5">
+          <h2 className="mb-3 font-display text-lg font-bold">
+            Cancelled{" "}
+            <span className="text-sm font-normal text-ink-soft">({cancelled.length})</span>
+          </h2>
+          <ul className="space-y-2">
+            {cancelled.map((b) => (
+              <li
+                key={b.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-surface p-3 text-sm"
+              >
+                <div>
+                  <p className="font-bold">
+                    {b.serviceName || "Service"} · ARVO-{String(b.id).padStart(4, "0")}
+                  </p>
+                  <p className="text-xs text-ink-soft">
+                    {b.customer_name}
+                    {b.cancelled_at ? ` · cancelled ${formatCreated(b.cancelled_at)}` : ""}
+                    {b.priceCents != null ? ` · ${formatAUD(b.priceCents)} paid → credit` : ""}
+                  </p>
+                </div>
+                <span className="chip bg-surface text-ink-soft">Cancelled</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* Availability note */}
       <section className="card mt-6 p-5 text-sm text-ink-soft">

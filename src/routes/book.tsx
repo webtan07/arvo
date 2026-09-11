@@ -1,7 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { getShop, getSlotGrid, createBooking, getFeeSchedule } from "~/db/server";
-import type { CreateBookingResult, FeeSchedule, GridSlot, ServiceRow, ShopRow } from "~/db/server";
+import {
+  getShop,
+  getSlotGrid,
+  createBooking,
+  getFeeSchedule,
+  getCustomerCredits,
+} from "~/db/server";
+import type {
+  CreateBookingResult,
+  CustomerCreditsResult,
+  FeeSchedule,
+  GridSlot,
+  ServiceRow,
+  ShopRow,
+} from "~/db/server";
 import { getSessionUser } from "~/db/auth";
 import type { SessionUser } from "~/db/auth";
 import { getSessionToken } from "~/lib/session";
@@ -39,6 +52,11 @@ function BookPage() {
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [created, setCreated] = useState<CreateBookingResult | null>(null);
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
+
+  // Active credit balance for the email entered in the details step — offered
+  // (opt-in checkbox, UNCHECKED by default) at the payment step only.
+  const [credits, setCredits] = useState<CustomerCreditsResult | null>(null);
+  const [applyCredit, setApplyCredit] = useState(false);
 
   // If a customer is logged in, resolve their session once so we can prefill
   // the details form and link the new booking to their account.
@@ -89,10 +107,72 @@ function BookPage() {
     };
   }, [shopSlug, navigate]);
 
+  // Fetch the active credit balance for the entered email when the customer
+  // reaches the payment step. Credit application is OPT-IN (checkbox, unchecked
+  // by default) — it is never auto-applied.
+  useEffect(() => {
+    if (step !== "payment" || !email) return;
+    let active = true;
+    (async () => {
+      try {
+        const res = await getCustomerCredits({ data: { email } });
+        if (!active) return;
+        setCredits(res);
+        if (res.ok && res.totals.activeCents <= 0) setApplyCredit(false);
+      } catch (e) {
+        if (active) {
+          setCredits(null);
+          console.error("Failed to load credit balance:", e);
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [step, email]);
+
   const service = useMemo(
     () => shopData?.services.find((s) => s.slug === serviceSlug) ?? null,
     [shopData, serviceSlug],
   );
+
+  // Exact fee split (reused for the breakdown and the credit offer).
+  const feeBreakdown = useMemo(() => {
+    if (!feeSchedule || !service) return null;
+    return calculateFees(service.price_cents, {
+      percent: feeSchedule.percent,
+      fixedCents: feeSchedule.fixedCents,
+    });
+  }, [feeSchedule, service]);
+
+  // Opt-in credit: UNCHECKED by default; when checked, the balance reduces the
+  // amount charged (total = service + fee − credit).
+  const activeCredits = useMemo(
+    () =>
+      credits?.ok
+        ? credits.credits.filter((c) => c.effectiveStatus === "active")
+        : [],
+    [credits],
+  );
+  const activeCreditCents = useMemo(
+    () => activeCredits.reduce((s, c) => s + c.amount_cents, 0),
+    [activeCredits],
+  );
+  const creditExpiryLabel = useMemo(() => {
+    if (activeCredits.length === 0) return null;
+    const earliest = activeCredits.reduce((min, c) =>
+      c.expires_at < min.expires_at ? c : min,
+    );
+    return new Date(earliest.expires_at).toLocaleDateString("en-AU", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  }, [activeCredits]);
+  const creditToApply = applyCredit
+    ? Math.min(activeCreditCents, feeBreakdown?.totalCents ?? 0)
+    : 0;
+  const chargedCents = feeBreakdown ? feeBreakdown.totalCents - creditToApply : 0;
 
   const groupedSlots = useMemo(() => {
     const map = new Map<string, GridSlot[]>();
@@ -141,6 +221,7 @@ function BookPage() {
         customerEmail: email,
         customerPhone: phone,
         customerId: sessionUser?.id ?? null,
+        applyCredit,
       },
     });
     setCreating(false);
@@ -342,38 +423,53 @@ function BookPage() {
             )}
 
             {/* Transparent breakdown before the customer commits: this is the
-                exact split the server will charge (service + Stripe fee). */}
-            {feeSchedule && (
+                exact split the server will charge (service + Stripe fee − credit). */}
+            {feeSchedule && feeBreakdown && (
               <div className="rounded-xl border border-line bg-surface p-4 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-ink-soft">Service</span>
                   <span className="font-semibold">{formatAUD(service.price_cents)}</span>
                 </div>
                 <div className="mt-1.5 flex items-center justify-between">
-                  <span className="text-ink-soft">
-                    Stripe fee ({feeSchedule.rateLabel})
-                  </span>
-                  <span className="font-semibold">
-                    {formatAUD(
-                      calculateFees(service.price_cents, {
-                        percent: feeSchedule.percent,
-                        fixedCents: feeSchedule.fixedCents,
-                      }).feeCents,
-                    )}
-                  </span>
+                  <span className="text-ink-soft">Stripe fee ({feeSchedule.rateLabel})</span>
+                  <span className="font-semibold">{formatAUD(feeBreakdown.feeCents)}</span>
                 </div>
+                {creditToApply > 0 && (
+                  <div className="mt-1.5 flex items-center justify-between">
+                    <span className="text-ink-soft">Credit applied</span>
+                    <span className="font-semibold text-brand">−{formatAUD(creditToApply)}</span>
+                  </div>
+                )}
                 <div className="mt-1.5 flex items-center justify-between border-t border-line pt-1.5">
                   <span className="font-bold text-ink">Total due</span>
                   <span className="font-display font-extrabold text-brand">
-                    {formatAUD(
-                      calculateFees(service.price_cents, {
-                        percent: feeSchedule.percent,
-                        fixedCents: feeSchedule.fixedCents,
-                      }).totalCents,
-                    )}
+                    {formatAUD(chargedCents)}
                   </span>
                 </div>
               </div>
+            )}
+
+            {/* Opt-in credit offer — UNCHECKED by default, never auto-applied.
+                Only offered when the entered email actually has an active balance. */}
+            {activeCreditCents > 0 && (
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-brand/30 bg-brand/5 p-4 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 accent-brand"
+                  checked={applyCredit}
+                  onChange={(e) => setApplyCredit(e.target.checked)}
+                />
+                <span>
+                  <span className="font-bold text-ink">
+                    You have {formatAUD(activeCreditCents)} credit
+                    {creditExpiryLabel ? ` · expires ${creditExpiryLabel}` : ""}
+                  </span>
+                  <span className="block text-ink-soft">
+                    Tick to apply your credit — we'll only charge{" "}
+                    {formatAUD(Math.max(chargedCents, 0))} (the difference after credit).
+                  </span>
+                </span>
+              </label>
             )}
 
             {createErr && <p className="text-sm text-red-600">{createErr}</p>}
@@ -391,11 +487,31 @@ function BookPage() {
             {/* Card collection after the booking is created (real Stripe or demo mode) */}
             {created?.ok && created.booking && created.payment && (
               <div className="mt-2 border-t border-line pt-4">
-                <PaymentForm
-                  payment={created.payment}
-                  bookingId={created.booking.id}
-                  onPaid={() => goToConfirm(created.booking!.id)}
-                />
+                {created.payment.paidInFull ? (
+                  /* Credit fully covered the total — no card needed, the booking
+                     is already confirmed/paid. */
+                  <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
+                    <p className="font-bold">
+                      Paid in full with your credit — nothing to pay.
+                    </p>
+                    <p className="mt-1">
+                      Your booking is confirmed. We've emailed you the receipt.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn mt-3"
+                      onClick={() => goToConfirm(created.booking!.id)}
+                    >
+                      View confirmation
+                    </button>
+                  </div>
+                ) : (
+                  <PaymentForm
+                    payment={created.payment}
+                    bookingId={created.booking.id}
+                    onPaid={() => goToConfirm(created.booking!.id)}
+                  />
+                )}
               </div>
             )}
           </div>
