@@ -9,6 +9,7 @@ import {
   sendBookingRescheduledEmail,
   sendOwnerRescheduleNotificationEmail,
   sendCreditIssuedEmail,
+  sendServiceCompletedEmail,
 } from "~/lib/mail";
 import {
   calculateFees,
@@ -17,6 +18,12 @@ import {
   CREDIT_EXPIRY_DAYS,
   type FeeConfig,
 } from "~/lib/fees";
+import {
+  parseDataUrl,
+  reviewPath,
+  COMPLETION_PHOTO_ACCEPT,
+  COMPLETION_PHOTO_MAX_BASE64_LEN,
+} from "~/lib/images";
 import {
   resolveSessionUser,
   createOwnerShopBranch,
@@ -81,6 +88,16 @@ export interface BookingRow {
   credit_applied_cents: number;
   /** when the business owner cancelled the booking (null until cancelled) */
   cancelled_at: string | null;
+  /**
+   * Data URL of the serviced-vehicle photo the owner uploads on completion
+   * (Phase B part 3). NOT included in list/view payloads (can be MBs) — fetch
+   * on demand via getCompletionPhoto.
+   */
+  completion_photo_path: string | null;
+  /** when the owner marked the job complete (status 'completed') */
+  completed_at: string | null;
+  /** stamped when the completion email (photo + review link) was sent */
+  completion_email_sent_at: string | null;
   created_at: string;
 }
 
@@ -102,6 +119,14 @@ const asShop = (r: Record<string, any>): ShopRow => ({
   photos: Array.isArray(r.photos) ? r.photos : [],
   description: r.description,
 });
+
+/**
+ * Booking columns safe to ship in list/detail payloads. Explicitly EXCLUDES
+ * completion_photo_path (a data URL that can be hundreds of KB each) and
+ * cancel_decision_token (single-use, customer-only). Prefixed with `b.` for
+ * use in FROM arvo.bookings b joins.
+ */
+const BOOKING_VIEW_COLUMNS = `b.id, b.shop_id, b.service_id, b.slot_id, b.customer_name, b.customer_email, b.customer_phone, b.status, b.payment_option, b.paid, b.payment_intent_id, b.seen, b.customer_id, b.email_sent_at, b.service_cents, b.fee_cents, b.total_cents, b.credit_applied_cents, b.cancelled_at, b.completed_at, b.completion_email_sent_at, b.created_at`;
 
 function rowToBookingView(r: Record<string, any>): BookingView {
   return {
@@ -128,6 +153,19 @@ function rowToBookingView(r: Record<string, any>): BookingView {
         : r.cancelled_at instanceof Date
           ? r.cancelled_at.toISOString()
           : r.cancelled_at,
+    completion_photo_path: r.completion_photo_path ?? null,
+    completed_at:
+      r.completed_at == null
+        ? null
+        : r.completed_at instanceof Date
+          ? r.completed_at.toISOString()
+          : r.completed_at,
+    completion_email_sent_at:
+      r.completion_email_sent_at == null
+        ? null
+        : r.completion_email_sent_at instanceof Date
+          ? r.completion_email_sent_at.toISOString()
+          : r.completion_email_sent_at,
     email_sent_at:
       r.email_sent_at == null ? null : r.email_sent_at instanceof Date
         ? r.email_sent_at.toISOString()
@@ -649,7 +687,7 @@ export const getBooking = createServerFn()
   .handler(async ({ data: id }): Promise<BookingView | null> => {
     const db = sql();
     const rows = await db`
-      SELECT b.*, s.name AS shop_name, s.slug AS shop_slug,
+      SELECT ${BOOKING_VIEW_COLUMNS}, s.name AS shop_name, s.slug AS shop_slug,
              sv.name AS service_name, sv.duration_min, sv.price_cents,
              sl.starts_at AS slot_starts, sl.ends_at AS slot_ends
       FROM arvo.bookings b
@@ -674,7 +712,7 @@ async function loadDashboard(shopId: number): Promise<DashboardData> {
   if (shops.length === 0) return { shop: null, bookings: [], unread: 0 };
   const shop = asShop(shops[0] as Record<string, any>);
   const rows = await db`
-    SELECT b.*, s.name AS shop_name, s.slug AS shop_slug,
+    SELECT ${BOOKING_VIEW_COLUMNS}, s.name AS shop_name, s.slug AS shop_slug,
            sv.name AS service_name, sv.duration_min, sv.price_cents,
            sl.starts_at AS slot_starts, sl.ends_at AS slot_ends
     FROM arvo.bookings b
@@ -823,7 +861,7 @@ export const getMyBookings = createServerFn()
     if (!user || user.role !== "customer") return [];
     const db = sql();
     const rows = await db`
-      SELECT b.*, s.name AS shop_name, s.slug AS shop_slug,
+      SELECT ${BOOKING_VIEW_COLUMNS}, s.name AS shop_name, s.slug AS shop_slug,
              sv.name AS service_name, sv.duration_min, sv.price_cents,
              sl.starts_at AS slot_starts, sl.ends_at AS slot_ends
       FROM arvo.bookings b
@@ -1478,5 +1516,322 @@ export const cancelBookingByOwner = createServerFn()
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
+    },
+  );
+
+/* ═══════════════════════════════════════════════════════════════
+ * Phase B part 3 — service completion (vehicle photo → customer) +
+ * owner transaction history
+ *
+ * Rules (enforced server-side):
+ *   - ONLY the mobile business owner (session + shop ownership) can complete a
+ *     booking. There is no completion endpoint callable by customers.
+ *   - Completable states: 'confirmed' and 'rescheduled' only — pending /
+ *     awaiting_payment / cancellation_pending / cancelled are rejected.
+ *   - The photo of the serviced vehicle is REQUIRED. It is stored as a data URL
+ *     on the booking (bookings.completion_photo_path) and embedded inline in
+ *     the customer email. A data URL (rather than a hosted path) because this
+ *     TanStack version has no public GET endpoint mechanism — api/ files are
+ *     server-fn modules callable only client-side (POST via /_serverFn), so a
+ *     hosted image URL is not available. It renders everywhere <img> does and
+ *     rides the booking row (cascades on delete).
+ *   - The transaction ledger keeps its money status ('paid' — nothing about
+ *     the money changed); delivery is recorded via completed_at on both the
+ *     booking and the transaction row.
+ *   - Customer notification: job complete + inline photo + review link
+ *     (/review/<bookingId> — the route lands in the next phase) — bounded and
+ *     non-blocking like every other mail send.
+ * ═══════════════════════════════════════════════════════════════ */
+
+/** Booking statuses the owner may complete. */
+const COMPLETABLE_STATUSES = ["confirmed", "rescheduled"];
+
+export interface CompleteBookingInput {
+  token: string;
+  slug: string;
+  bookingId: number;
+  /**
+   * Data URL of the serviced-vehicle photo ("data:image/jpeg;base64,…").
+   * Required — completion is rejected without it.
+   */
+  photoUrl: string;
+}
+
+export interface CompleteBookingResult {
+  ok: boolean;
+  error?: string;
+  booking?: BookingView;
+}
+
+/**
+ * THE only completion path in the app: the owner marks a confirmed/rescheduled
+ * booking complete from their dashboard and uploads the required photo of the
+ * serviced vehicle. Server-side enforced — requires an owner session whose shop
+ * owns the booking; customers cannot call this.
+ */
+export const completeBookingByOwner = createServerFn()
+  .validator((d: CompleteBookingInput) => d)
+  .handler(
+    async ({ data }): Promise<CompleteBookingResult> => {
+      try {
+        const user = await resolveSessionUser(data.token);
+        if (!user || user.role !== "owner") {
+          return { ok: false, error: "Only the mobile business owner can complete a booking." };
+        }
+
+        // The photo is required (spec: "a photo of the serviced vehicle will be
+        // sent"). Validate type + size against the shared policy in images.ts.
+        const parsed = data.photoUrl ? parseDataUrl(data.photoUrl) : null;
+        if (!parsed) {
+          return {
+            ok: false,
+            error:
+              "A photo of the serviced vehicle is required. Attach a photo and try again.",
+          };
+        }
+        if (!COMPLETION_PHOTO_ACCEPT.includes(parsed.mimeType)) {
+          return { ok: false, error: "Please upload a JPEG, PNG or WebP photo of the serviced vehicle." };
+        }
+        if (parsed.base64.length > COMPLETION_PHOTO_MAX_BASE64_LEN) {
+          return {
+            ok: false,
+            error:
+              "That photo is too large to send to the customer. Please choose a smaller photo (under ~3 MB).",
+          };
+        }
+
+        const db = sql();
+        const rows = await db`
+          SELECT b.*, s.name AS shop_name, sv.name AS service_name, sl.starts_at AS slot_starts
+          FROM arvo.bookings b
+          JOIN arvo.shops s ON s.id = b.shop_id
+          LEFT JOIN arvo.services sv ON sv.id = b.service_id
+          LEFT JOIN arvo.slots sl ON sl.id = b.slot_id
+          WHERE b.id = ${data.bookingId}
+        `;
+        if (rows.length === 0) return { ok: false, error: "Booking not found." };
+        const b = rows[0] as Record<string, any>;
+        if (user.shopId == null || user.shopId !== Number(b.shop_id)) {
+          return { ok: false, error: "You can only complete bookings for your own business." };
+        }
+        if (!COMPLETABLE_STATUSES.includes(String(b.status))) {
+          return {
+            ok: false,
+            error:
+              "This booking can't be completed — only confirmed or rescheduled bookings can be marked complete.",
+          };
+        }
+
+        // Atomic flip to 'completed' — only from confirmed/rescheduled, so a
+        // double tap can never complete twice or complete a cancelled booking.
+        const updated = await db`
+          UPDATE arvo.bookings
+          SET status = 'completed',
+              completed_at = now(),
+              seen = true,
+              completion_photo_path = ${data.photoUrl.trim()}
+          WHERE id = ${data.bookingId}
+            AND status IN ('confirmed', 'rescheduled')
+          RETURNING *
+        `;
+        if (updated.length === 0) {
+          return { ok: false, error: "This booking changed state — refresh and try again." };
+        }
+        const booking = rowToBookingView(updated[0] as Record<string, any>);
+
+        // Ledger: money status stays as-is ('paid'), but stamp delivery on the
+        // transaction row so history + analytics can split delivered vs paid.
+        await db`
+          UPDATE arvo.transactions SET completed_at = now()
+          WHERE booking_id = ${booking.id} AND completed_at IS NULL
+        `;
+
+        // Customer notification (bounded, non-blocking): job complete, photo
+        // embedded inline, review link. The /review/<id> route lands in the
+        // next phase — until then the link is formatted consistently.
+        try {
+          await sendServiceCompletedEmail({
+            to: booking.customer_email,
+            reference: `ARVO-${String(booking.id).padStart(4, "0")}`,
+            shopName: b.shop_name,
+            serviceName: b.service_name || "Car detailing",
+            when: b.slot_starts ? formatBookingDate(b.slot_starts) : null,
+            photoDataUrl: booking.completion_photo_path ?? undefined,
+            reviewUrl: `${config.appBaseUrl}${reviewPath(booking.id)}`,
+          });
+          await db`
+            UPDATE arvo.bookings SET completion_email_sent_at = now() WHERE id = ${booking.id}
+          `;
+        } catch (e) {
+          console.error(
+            `[arvo:mail] completion email failed for booking ${booking.id}:`,
+            e instanceof Error ? e.message : e,
+          );
+        }
+
+        return { ok: true, booking };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+
+/**
+ * Fetch the serviced-vehicle photo for one booking. Available to the shop owner
+ * (dashboard thumbnails) and to the booking's own customer (account page). The
+ * data URL is excluded from list/detail payloads because it can be large — fetch
+ * on demand only.
+ */
+export const getCompletionPhoto = createServerFn()
+  .validator((d: { token: string; bookingId: number }) => d)
+  .handler(
+    async ({ data }): Promise<{ ok: boolean; error?: string; photoUrl?: string }> => {
+      const user = await resolveSessionUser(data.token);
+      if (!user) return { ok: false, error: "Sign in required." };
+      const db = sql();
+      const rows = await db`
+        SELECT shop_id, customer_id, customer_email, completion_photo_path
+        FROM arvo.bookings WHERE id = ${data.bookingId}
+      `;
+      if (rows.length === 0) return { ok: false, error: "Booking not found." };
+      const b = rows[0] as Record<string, any>;
+      const isOwner = user.role === "owner" && user.shopId != null && user.shopId === Number(b.shop_id);
+      const isOwnerCustomer =
+        user.role === "customer" &&
+        (Number(b.customer_id) === user.id ||
+          user.email.toLowerCase() === String(b.customer_email).toLowerCase());
+      if (!isOwner && !isOwnerCustomer) {
+        return { ok: false, error: "You don't have permission to view this photo." };
+      }
+      if (!b.completion_photo_path) return { ok: false, error: "No photo on this booking." };
+      return { ok: true, photoUrl: b.completion_photo_path };
+    },
+  );
+
+/**
+ * One row in the owner's transaction history — every booking of the shop with
+ * its money movement, straight from the ledger (arvo.bookings +
+ * arvo.transactions + arvo.credits). No separate history table: this is the
+ * foundation for the analytics dashboard (Phase B item 8).
+ *
+ * Amount semantics (single source of truth = the ledger):
+ *   service_cents       — service price
+ *   fee_cents           — Stripe fee surcharge passed on to the customer
+ *   total_cents         — NET cash that moved = service + fee − credit applied
+ *                         (prefer the transaction row's stored total; fall back
+ *                         to the booking's snapshot for pre-ledger rows)
+ *   credit_applied_cents— credit used at checkout for this booking
+ *   credit_issued_cents — credits ISSUED from this booking (cancel-for-credit
+ *                         after an owner cancellation) — money that left the
+ *                         ledger as store credit
+ */
+export interface OwnerTransactionRow {
+  booking_id: number;
+  reference: string;
+  /** bookings.status — the service lifecycle ('completed', 'cancelled', …). */
+  booking_status: string;
+  /** transactions.status — the money lifecycle ('paid', 'credited', …). */
+  transaction_status: string | null;
+  service_name: string | null;
+  customer_name: string;
+  customer_email: string;
+  slot_starts_at: string | null;
+  created_at: string;
+  paid_at: string | null;
+  cancelled_at: string | null;
+  completed_at: string | null;
+  service_cents: number | null;
+  fee_cents: number | null;
+  total_cents: number | null;
+  credit_applied_cents: number | null;
+  /** net cash that moved (== total_cents). */
+  net_cash_cents: number | null;
+  credit_issued_cents: number | null;
+  payment_method: string | null;
+  paid: boolean;
+}
+
+export const getOwnerTransactions = createServerFn()
+  .validator((d: { token: string; slug: string }) => d)
+  .handler(
+    async ({
+      data,
+    }): Promise<{ access: OwnerDashAccess; rows: OwnerTransactionRow[] }> => {
+      const user = await resolveSessionUser(data.token);
+      if (!user) return { access: "guest", rows: [] };
+      if (user.role !== "owner") return { access: "denied", rows: [] };
+      const db = sql();
+      const shops = await db`SELECT id FROM arvo.shops WHERE slug = ${data.slug}`;
+      if (shops.length === 0) return { access: "ok", rows: [] };
+      const shopId = Number((shops[0] as { id: number }).id);
+      if (user.shopId == null || user.shopId !== shopId) return { access: "denied", rows: [] };
+
+      const rows = await db`
+        SELECT b.id AS booking_id,
+               b.status AS booking_status,
+               b.customer_name, b.customer_email, b.paid,
+               b.service_cents AS booking_service_cents,
+               b.fee_cents AS booking_fee_cents,
+               b.credit_applied_cents AS booking_credit_applied_cents,
+               b.created_at, b.cancelled_at, b.completed_at,
+               sv.name AS service_name,
+               sl.starts_at AS slot_starts,
+               tx.status AS transaction_status,
+               tx.total_cents AS tx_total_cents,
+               tx.service_cents AS tx_service_cents,
+               tx.fee_cents AS tx_fee_cents,
+               tx.credit_applied_cents AS tx_credit_applied_cents,
+               tx.paid_at, tx.payment_method,
+               cr.issued_cents
+        FROM arvo.bookings b
+        JOIN arvo.shops s ON s.id = b.shop_id
+        LEFT JOIN arvo.services sv ON sv.id = b.service_id
+        LEFT JOIN arvo.slots sl ON sl.id = b.slot_id
+        LEFT JOIN arvo.transactions tx ON tx.booking_id = b.id
+        LEFT JOIN (
+          SELECT source_booking_id, COALESCE(SUM(amount_cents), 0)::int AS issued_cents
+          FROM arvo.credits
+          GROUP BY source_booking_id
+        ) cr ON cr.source_booking_id = b.id
+        WHERE b.shop_id = ${shopId}
+        ORDER BY COALESCE(b.completed_at, b.cancelled_at, sl.starts_at, b.created_at) DESC
+      `;
+
+      const isoOrNull = (v: unknown): string | null =>
+        v == null ? null : v instanceof Date ? v.toISOString() : String(v);
+
+      const out: OwnerTransactionRow[] = (rows as Record<string, any>[]).map((r) => {
+        const svc = r.tx_service_cents ?? r.booking_service_cents;
+        const fee = r.tx_fee_cents ?? r.booking_fee_cents;
+        const credit = r.tx_credit_applied_cents ?? r.booking_credit_applied_cents ?? 0;
+        const txTotal = r.tx_total_cents == null ? null : Number(r.tx_total_cents);
+        const total =
+          txTotal ??
+          (svc != null && fee != null ? Number(svc) + Number(fee) - Number(credit) : svc == null ? null : Number(svc));
+        return {
+          booking_id: Number(r.booking_id),
+          reference: `ARVO-${String(Number(r.booking_id)).padStart(4, "0")}`,
+          booking_status: r.booking_status,
+          transaction_status: r.transaction_status == null ? null : r.transaction_status,
+          service_name: r.service_name == null ? null : r.service_name,
+          customer_name: r.customer_name,
+          customer_email: r.customer_email,
+          slot_starts_at: isoOrNull(r.slot_starts),
+          created_at: isoOrNull(r.created_at) ?? "",
+          paid_at: isoOrNull(r.paid_at),
+          cancelled_at: isoOrNull(r.cancelled_at),
+          completed_at: isoOrNull(r.completed_at),
+          service_cents: svc == null ? null : Number(svc),
+          fee_cents: fee == null ? null : Number(fee),
+          total_cents: total,
+          credit_applied_cents: credit == null ? null : Number(credit),
+          net_cash_cents: total,
+          credit_issued_cents: r.issued_cents == null ? null : Number(r.issued_cents),
+          payment_method: r.payment_method == null ? null : r.payment_method,
+          paid: Boolean(r.paid),
+        };
+      });
+
+      return { access: "ok", rows: out };
     },
   );

@@ -14,6 +14,7 @@
  * the booking flow (see sendBookingConfirmation in db/server.ts).
  */
 import nodemailer from "nodemailer";
+import { parseDataUrl } from "~/lib/images";
 
 const SEND_TIMEOUT_MS = 15_000;
 const SMTP_TIMEOUT_MS = 10_000;
@@ -632,6 +633,110 @@ At your next booking, tick the credit option at checkout to apply it. Unused cre
       subject: `You have ${credit} Arvo credit — ${data.reference}`,
       html,
       text,
+    }),
+    SEND_TIMEOUT_MS,
+  );
+}
+
+export interface ServiceCompletedData {
+  to: string;
+  reference: string;
+  shopName: string;
+  serviceName: string;
+  /** Appointment time, already formatted en-AU. */
+  when: string | null;
+  /**
+   * Data URL of the serviced-vehicle photo ("data:image/jpeg;base64,…"). When
+   * provided the photo is embedded INLINE in the email (CID attachment, shows
+   * in Gmail etc.); always absent from the plain-text fallback, which links the
+   * review instead.
+   */
+  photoDataUrl?: string;
+  /** Absolute URL the customer opens to leave a review (/review/<bookingId>). */
+  reviewUrl: string;
+}
+
+/**
+ * Customer notification after the mobile business completes the job: the service
+ * is done, the photo of the serviced vehicle is embedded, and there's a review
+ * link. Throws on failure — callers MUST guard with try/catch (see
+ * completeBookingByOwner in db/server.ts).
+ */
+export async function sendServiceCompletedEmail(
+  data: ServiceCompletedData,
+): Promise<unknown> {
+  const fromUser = senderEmail();
+  if (!fromUser || !process.env.EMAIL_APP_PASSWORD) {
+    throw new Error("EMAIL_USER / EMAIL_APP_PASSWORD not set — cannot send completion email.");
+  }
+  const when = data.when
+    ? `<tr><td style="padding:6px 0;color:#6b7280;">Service was for</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.when}</td></tr>`
+    : "";
+
+  // Inline embedded photo (CID). The mail client fetches it from the message
+  // itself, so it always renders even though Arvo has no public image host.
+  const parsed = data.photoDataUrl ? parseDataUrl(data.photoDataUrl) : null;
+  const photoHtml = parsed
+    ? `
+      <div style="background:#FFF7ED;border:1px solid #FDE1BC;border-radius:14px;padding:14px;margin:20px 0;">
+        <p style="margin:0 0 10px;font-size:13px;color:#6b7280;">Your serviced vehicle</p>
+        <img src="cid:service-photo" alt="Photo of your serviced vehicle" style="width:100%;max-width:480px;border-radius:10px;display:block;" />
+      </div>`
+    : "";
+
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto;padding:24px;">
+      <p style="font-size:13px;letter-spacing:.15em;color:#B45309;text-transform:uppercase;font-weight:bold;">Arvo · Car Detailing</p>
+      <h1 style="font-size:24px;line-height:1.3;margin:8px 0 4px;">Your service is complete 🎉</h1>
+      <p style="font-size:15px;color:#4b5563;">Your <b>${data.serviceName}</b> at <b>${data.shopName}</b> is finished and looks great. Thanks for booking with us!</p>
+      <div style="background:#FFF7ED;border:1px solid #FDE1BC;border-radius:14px;padding:20px;margin:20px 0;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr><td style="padding:6px 0;color:#6b7280;">Reference</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.reference}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Service</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.serviceName}</td></tr>
+          ${when}
+        </table>
+      </div>
+      ${photoHtml}
+      <p style="margin:20px 0 10px;">
+        <a href="${data.reviewUrl}" style="display:inline-block;background:#B45309;color:#fff;padding:12px 22px;border-radius:10px;text-decoration:none;font-weight:bold;">Leave a review</a>
+      </p>
+      <p style="font-size:13px;color:#4b5563;">How did we do? A short review helps the business — and future customers — know what to expect.</p>
+      <p style="font-size:13px;color:#9ca3af;margin-top:24px;">If the review button doesn't work, open this link: ${data.reviewUrl}</p>
+    </div>
+  `.trim();
+
+  const text = `
+Arvo · Car Detailing
+
+Your service is complete 🎉
+
+Your ${data.serviceName} at ${data.shopName} is finished — thanks for booking with us!
+
+Reference: ${data.reference}${data.when ? `\nService was for: ${data.when}` : ""}
+${parsed ? "A photo of your serviced vehicle is attached to this email.\n" : ""}
+How did we do? Leave a short review for the business:
+${data.reviewUrl}
+  `.trim();
+
+  const transporter = createTransporter();
+  return await withTimeout(
+    transporter.sendMail({
+      from: `"Arvo" <${fromUser}>`,
+      to: data.to,
+      subject: `Your service is complete — ${data.reference}`,
+      html,
+      text,
+      ...(parsed
+        ? {
+            attachments: [
+              {
+                filename: `${data.reference}-serviced-vehicle.jpg`,
+                content: Buffer.from(parsed.base64, "base64"),
+                cid: "service-photo",
+              },
+            ],
+          }
+        : {}),
     }),
     SEND_TIMEOUT_MS,
   );
