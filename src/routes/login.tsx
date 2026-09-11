@@ -4,11 +4,16 @@ import { loginCustomer } from "~/db/auth";
 import { setSessionToken } from "~/lib/session";
 
 export const Route = createFileRoute("/login")({
+  validateSearch: (search: Record<string, unknown>): { next?: string } => ({
+    // Optional post-login redirect (e.g. /review/<id> from the review page).
+    next: typeof search.next === "string" ? search.next : undefined,
+  }),
   component: LoginPage,
 });
 
 function LoginPage() {
   const navigate = useNavigate();
+  const search = Route.useSearch();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +30,13 @@ function LoginPage() {
       return;
     }
     setSessionToken(res.sessionToken);
-    navigate({ to: "/account" });
+          // Optional post-login redirect (review links etc.) — full page load so
+          // the fresh session token is picked up by the destination page.
+          if (search.next && search.next.startsWith("/")) {
+            window.location.assign(search.next);
+          } else {
+            navigate({ to: "/account" });
+          }
   }
 
   return (
