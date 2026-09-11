@@ -115,7 +115,13 @@ function LoginPage() {
         I run a mobile business — log in to my dashboard →
       </Link>
 
-      <p className="mt-6 text-center text-sm text-ink-soft">
+      <p className="mt-4 text-center text-xs text-ink-soft">
+        <Link to="/admin/login" className="hover:text-brand">
+          Arvo admin · sign in
+        </Link>
+      </p>
+
+      <p className="mt-4 text-center text-sm text-ink-soft">
         <Link to="/" className="hover:text-brand">
           ← Browse services
         </Link>
