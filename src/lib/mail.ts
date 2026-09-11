@@ -61,6 +61,36 @@ function createTransporter() {
   });
 }
 
+/** Amount split for a paid booking (AUD cents). */
+export interface BookingAmounts {
+  serviceCents: number;
+  feeCents: number;
+  totalCents: number;
+}
+
+export function formatAudCents(cents: number): string {
+  return `A$${(cents / 100).toFixed(2)}`;
+}
+
+/** Price-breakdown rows for the receipt/owner emails (Service / Stripe fee / Total). */
+function amountRowsHtml(amounts?: BookingAmounts): string {
+  if (!amounts) return "";
+  return `
+    <tr><td style="padding:6px 0;color:#6b7280;">Service</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${formatAudCents(amounts.serviceCents)}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280;">Stripe fee</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${formatAudCents(amounts.feeCents)}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280;border-top:1px solid #FDE1BC;">Total paid</td><td style="padding:6px 0;text-align:right;font-weight:bold;border-top:1px solid #FDE1BC;color:#B45309;">${formatAudCents(amounts.totalCents)}</td></tr>
+  `.trim();
+}
+
+function amountRowsText(amounts?: BookingAmounts): string {
+  if (!amounts) return "";
+  return `
+Service:   ${formatAudCents(amounts.serviceCents)}
+Stripe fee: ${formatAudCents(amounts.feeCents)}
+Total paid: ${formatAudCents(amounts.totalCents)}
+  `.trim();
+}
+
 export interface BookingConfirmationData {
   to: string;
   reference: string;
@@ -69,6 +99,8 @@ export interface BookingConfirmationData {
   /** Date/time already formatted en-AU, e.g. "Monday 25 July, 10:00 am". */
   when: string;
   address: string | null;
+  /** Amount split (service / fee / total) — included in the receipt when present. */
+  amounts?: BookingAmounts;
 }
 
 /**
@@ -88,6 +120,7 @@ export async function sendBookingConfirmationEmail(
 
   const when = data.when;
   const address = data.address || "";
+  const amountsHtml = amountRowsHtml(data.amounts);
 
   const html = `
     <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto;padding:24px;">
@@ -101,6 +134,7 @@ export async function sendBookingConfirmationEmail(
           <tr><td style="padding:6px 0;color:#6b7280;">Service</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.serviceName}</td></tr>
           <tr><td style="padding:6px 0;color:#6b7280;">When</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${when}</td></tr>
           ${address ? `<tr><td style="padding:6px 0;color:#6b7280;">Address</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${address}</td></tr>` : ""}
+          ${amountsHtml}
         </table>
       </div>
       <p style="font-size:14px;color:#4b5563;">We'll email you 1 day before and text you 1 hour before your appointment.</p>
@@ -115,7 +149,7 @@ Your booking is confirmed.
 Reference: ${data.reference}
 Detailer:  ${data.shopName}
 Service:   ${data.serviceName}
-When:      ${when}${address ? `\nAddress:   ${address}` : ""}
+When:      ${when}${address ? `\nAddress:   ${address}` : ""}${data.amounts ? `\n${amountRowsText(data.amounts)}` : ""}
 
 We'll email you 1 day before and text you 1 hour before your appointment.
   `.trim();
@@ -132,6 +166,84 @@ We'll email you 1 day before and text you 1 hour before your appointment.
     SEND_TIMEOUT_MS,
   );
 }
+export interface OwnerBookingNotificationData {
+  to: string;
+  ownerName: string | null;
+  reference: string;
+  shopName: string;
+  serviceName: string;
+  /** Date/time already formatted en-AU, e.g. "Monday 25 July, 10:00 am". */
+  when: string;
+  address: string | null;
+  customerName: string;
+  customerPhone: string | null;
+  /** Amount split (service / fee / total). */
+  amounts?: BookingAmounts;
+}
+
+/**
+ * Send the owner a new-booking notification (paid online) with the full
+ * booking + payment breakdown. Throws on failure — callers MUST guard this with
+ * try/catch (see sendBookingConfirmationEmailForBooking in db/server.ts).
+ */
+export async function sendOwnerBookingNotificationEmail(
+  data: OwnerBookingNotificationData,
+): Promise<unknown> {
+  const fromUser = senderEmail();
+  if (!fromUser) {
+    throw new Error("EMAIL_USER is not set — cannot send owner notification email.");
+  }
+  if (!process.env.EMAIL_APP_PASSWORD) {
+    throw new Error("EMAIL_APP_PASSWORD is not set — cannot send owner notification email.");
+  }
+  const when = data.when;
+  const address = data.address || "";
+  const amountsHtml = amountRowsHtml(data.amounts);
+  const greeting = data.ownerName ? `Hi ${data.ownerName},` : "Hi,";
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto;padding:24px;">
+      <p style="font-size:13px;letter-spacing:.15em;color:#B45309;text-transform:uppercase;font-weight:bold;">Arvo · Car Detailing</p>
+      <h1 style="font-size:24px;line-height:1.3;margin:8px 0 4px;">New booking — ${data.reference}</h1>
+      <p style="font-size:15px;color:#4b5563;">${greeting} A customer just booked and paid online. Here's everything you need:</p>
+      <div style="background:#FFF7ED;border:1px solid #FDE1BC;border-radius:14px;padding:20px;margin:20px 0;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr><td style="padding:6px 0;color:#6b7280;">Reference</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.reference}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Customer</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.customerName}${data.customerPhone ? ` · ${data.customerPhone}` : ""}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Service</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.serviceName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">When</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${when}</td></tr>
+          ${address ? `<tr><td style="padding:6px 0;color:#6b7280;">Address</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${address}</td></tr>` : ""}
+          ${amountsHtml}
+        </table>
+      </div>
+      <p style="font-size:13px;color:#9ca3af;">Manage this booking from your Arvo dashboard. The customer was emailed a confirmation with the same price breakdown.</p>
+    </div>
+  `.trim();
+  const text = `
+Arvo · Car Detailing
+New booking — ${data.reference}
+
+${greeting} A customer just booked and paid online.
+
+Reference: ${data.reference}
+Customer:  ${data.customerName}${data.customerPhone ? ` · ${data.customerPhone}` : ""}
+Service:   ${data.serviceName}
+When:      ${when}${address ? `\nAddress:   ${address}` : ""}${data.amounts ? `\n${amountRowsText(data.amounts)}` : ""}
+
+Manage this booking from your Arvo dashboard.
+  `.trim();
+  const transporter = createTransporter();
+  return await withTimeout(
+    transporter.sendMail({
+      from: `"Arvo" <${fromUser}>`,
+      to: data.to,
+      subject: `New Arvo booking — ${data.reference}`,
+      html,
+      text,
+    }),
+    SEND_TIMEOUT_MS,
+  );
+}
+
 export interface BookingReminderData {
   to: string;
   reference: string;

@@ -2,7 +2,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { sql, requireEnv } from "./connection";
 import { ensureSeed } from "./seed";
 import { createPaymentIntent, formatAUD, getStripeConfig } from "./stripe";
-import { sendBookingConfirmationEmail } from "~/lib/mail";
+import { sendBookingConfirmationEmail, sendOwnerBookingNotificationEmail } from "~/lib/mail";
+import { calculateFees, resolveFeeConfig, FEE_CURRENCY, type FeeConfig } from "~/lib/fees";
 import {
   resolveSessionUser,
   createOwnerShopBranch,
@@ -59,6 +60,10 @@ export interface BookingRow {
   customer_id: number | null;
   /** set once the confirmation email was successfully sent (reminder status) */
   email_sent_at: string | null;
+  /** amount split snapshot at booking time (null for pre-fee bookings) */
+  service_cents: number | null;
+  fee_cents: number | null;
+  total_cents: number | null;
   created_at: string;
 }
 
@@ -96,6 +101,9 @@ function rowToBookingView(r: Record<string, any>): BookingView {
     payment_intent_id: r.payment_intent_id,
     seen: Boolean(r.seen),
     customer_id: r.customer_id == null ? null : Number(r.customer_id),
+    service_cents: r.service_cents == null ? null : Number(r.service_cents),
+    fee_cents: r.fee_cents == null ? null : Number(r.fee_cents),
+    total_cents: r.total_cents == null ? null : Number(r.total_cents),
     email_sent_at:
       r.email_sent_at == null ? null : r.email_sent_at instanceof Date
         ? r.email_sent_at.toISOString()
@@ -232,6 +240,34 @@ export const getSlotGrid = createServerFn()
 
 export type PaymentOption = "pay_online";
 
+export interface FeeSchedule {
+  /** Stripe rate percent, e.g. 2.9 (non-AU cards) or 1.75 (AU domestic). */
+  percent: number;
+  /** Flat fee in AUD cents, e.g. 30. */
+  fixedCents: number;
+  currency: string;
+  /** Human summary shown in the checkout UI, e.g. "2.9% + A$0.30". */
+  rateLabel: string;
+}
+
+/**
+ * The fee schedule the server applies to every online payment. Reads env
+ * overrides (STRIPE_FEE_PERCENT / STRIPE_FEE_FIXED_CENTS); falls back to the
+ * documented Stripe defaults (2.9% + 30¢ AUD). Exposed as a server fn so the
+ * checkout UI can show the exact breakdown BEFORE the booking is created, with
+ * no drift between display and the amount actually carded.
+ */
+export const getFeeSchedule = createServerFn()
+  .handler(async (): Promise<FeeSchedule> => {
+    const cfg: FeeConfig = resolveFeeConfig(process.env);
+    return {
+      percent: cfg.percent,
+      fixedCents: cfg.fixedCents,
+      currency: FEE_CURRENCY,
+      rateLabel: `${cfg.percent}% + ${formatAUD(cfg.fixedCents)}`,
+    };
+  });
+
 export interface CreateBookingInput {
   shopSlug: string;
   serviceSlug: string;
@@ -248,9 +284,20 @@ export interface CreateBookingResult {
   booking?: BookingView;
   payment?: {
     mode: PaymentOption;
-    amountCents: number;
-    /** formatted price, e.g. "A$25.00" */
+    /** service price in cents — NOT what is carded */
+    serviceCents: number;
+    /** Stripe fee surcharge in cents */
+    feeCents: number;
+    /** total carded in cents (service + fee) */
+    totalCents: number;
+    /** formatted total, e.g. "A$26.03" */
     amountDisplay: string;
+    /** formatted service price, e.g. "A$25.00" */
+    serviceDisplay: string;
+    /** formatted fee, e.g. "A$1.03" */
+    feeDisplay: string;
+    /** fee rate summary, e.g. "2.9% + A$0.30" */
+    rateLabel: string;
     hasKeys: boolean;
     /** present only when hasKeys (real Stripe Payment Element) */
     clientSecret?: string;
@@ -299,13 +346,17 @@ export const createBooking = createServerFn()
 
       // Every booking pays now: create the PaymentIntent up front when real
       // Stripe keys are configured (otherwise the UI runs in demo mode).
+      // The customer pays service price + Stripe fee surcharge (2.9% + 30¢ AUD
+      // by default — see src/lib/fees.ts), so the intent amount is the TOTAL.
       const paymentOption: PaymentOption = "pay_online";
       let paymentIntentId: string | null = null;
       const stripe = getStripeConfig();
+      const feeCfg: FeeConfig = resolveFeeConfig(process.env);
+      const { feeCents, totalCents } = calculateFees(priceCents, feeCfg);
 
       if (stripe.hasKeys) {
         const pi = await createPaymentIntent({
-          amountCents: priceCents,
+          amountCents: totalCents, // service + fee — this is what gets carded
           currency: "aud",
           customerName: data.customerName,
           customerEmail: data.customerEmail,
@@ -319,12 +370,27 @@ export const createBooking = createServerFn()
 
       const inserted = await db`
         INSERT INTO arvo.bookings
-          (shop_id, service_id, slot_id, customer_id, customer_name, customer_email, customer_phone, status, payment_option, paid, payment_intent_id)
+          (shop_id, service_id, slot_id, customer_id, customer_name, customer_email, customer_phone, status, payment_option, paid, payment_intent_id, service_cents, fee_cents, total_cents)
         VALUES
-          (${shopId}, ${serviceId}, ${slotId}, ${data.customerId ?? null}, ${data.customerName}, ${data.customerEmail}, ${data.customerPhone || null}, ${status}, ${paymentOption}, false, ${paymentIntentId})
+          (${shopId}, ${serviceId}, ${slotId}, ${data.customerId ?? null}, ${data.customerName}, ${data.customerEmail}, ${data.customerPhone || null}, ${status}, ${paymentOption}, false, ${paymentIntentId}, ${priceCents}, ${feeCents}, ${totalCents})
         RETURNING *
       `;
       const booking = rowToBookingView(inserted[0] as Record<string, any>);
+
+      // Payment ledger row — created 'pending' with the booking, flipped to
+      // 'paid' by markBookingPaid when the card charge succeeds. This is the
+      // record later Phase B work (owner transaction history, admin analytics,
+      // cancellations/refunds) builds on.
+      const txInserted = await db`
+        INSERT INTO arvo.transactions
+          (booking_id, shop_id, service_id, customer_id, customer_name, customer_email, service_cents, fee_cents, total_cents, currency, status, payment_method, payment_intent_id)
+        VALUES
+          (${booking.id}, ${shopId}, ${serviceId}, ${data.customerId ?? null}, ${data.customerName}, ${data.customerEmail}, ${priceCents}, ${feeCents}, ${totalCents}, 'aud', 'pending', 'card', ${paymentIntentId})
+        RETURNING id
+      `;
+      if (txInserted.length === 0) {
+        console.error(`[arvo:tx] transaction row not created for booking ${booking.id}`);
+      }
 
       let clientSecret: string | undefined;
       if (paymentIntentId && stripe.hasKeys) {
@@ -340,8 +406,13 @@ export const createBooking = createServerFn()
         booking,
         payment: {
           mode: paymentOption,
-          amountCents: priceCents,
-          amountDisplay: formatAUD(priceCents),
+          serviceCents: priceCents,
+          feeCents,
+          totalCents,
+          amountDisplay: formatAUD(totalCents),
+          serviceDisplay: formatAUD(priceCents),
+          feeDisplay: formatAUD(feeCents),
+          rateLabel: `${feeCfg.percent}% + ${formatAUD(feeCfg.fixedCents)}`,
           hasKeys: stripe.hasKeys,
           ...(clientSecret && stripe.hasKeys
             ? { clientSecret, publishableKey: stripe.publishableKey }
@@ -374,6 +445,14 @@ export const markBookingPaid = createServerFn()
       WHERE id = ${id} AND status = 'awaiting_payment'
       RETURNING id
     `;
+    // Payment confirmed → update the payment ledger (pending → paid).
+    if (updated.length > 0) {
+      await db`
+        UPDATE arvo.transactions
+        SET status = 'paid', paid_at = now()
+        WHERE booking_id = ${id} AND status = 'pending'
+      `;
+    }
     // Payment confirmed → send the confirmation email (bounded, non-blocking).
     // Booking success is never dependent on mail: on failure we only log.
     if (updated.length > 0) {
@@ -383,15 +462,18 @@ export const markBookingPaid = createServerFn()
   });
 
 /**
- * Build + send the booking confirmation email for a confirmed booking, then
- * stamp `email_sent_at` on success. Never throws — failures are logged and the
- * booking is unaffected.
+ * Build + send the post-payment emails for a confirmed booking:
+ *   1. customer receipt (booking confirmed + amount breakdown), and
+ *   2. owner notification (new paid booking with details + breakdown).
+ * Then stamp `email_sent_at` on success. Never throws — failures are logged and
+ * the booking is unaffected.
  */
 async function sendBookingConfirmationEmailForBooking(bookingId: number): Promise<void> {
   try {
     const db = sql();
     const rows = await db`
-      SELECT b.id, b.customer_email,
+      SELECT b.id, b.customer_email, b.customer_name, b.customer_phone,
+             b.service_cents, b.fee_cents, b.total_cents, b.shop_id,
              s.name AS shop_name, s.address AS shop_address,
              sv.name AS service_name,
              sl.starts_at AS slot_starts
@@ -411,15 +493,56 @@ async function sendBookingConfirmationEmailForBooking(bookingId: number): Promis
       hour: "numeric",
       minute: "2-digit",
     });
+    const reference = `ARVO-${String(Number(r.id)).padStart(4, "0")}`;
+    // Amounts snapshot at booking time (null for bookings created before fees).
+    const amounts =
+      r.total_cents != null
+        ? {
+            serviceCents: Number(r.service_cents ?? 0),
+            feeCents: Number(r.fee_cents ?? 0),
+            totalCents: Number(r.total_cents),
+          }
+        : undefined;
 
+    // 1. Customer receipt with the fee breakdown.
     await sendBookingConfirmationEmail({
       to: r.customer_email,
-      reference: `ARVO-${String(Number(r.id)).padStart(4, "0")}`,
+      reference,
       shopName: r.shop_name,
       serviceName: r.service_name || "Car detailing",
       when,
       address: r.shop_address || null,
+      amounts,
     });
+
+    // 2. Owner notification. Seeded demo shops may have no owner row on file —
+    //    in that case skip silently (the booking still lands on the dashboard).
+    const owners = await db`
+      SELECT email, name FROM arvo.owners WHERE shop_id = ${Number(r.shop_id)} ORDER BY id ASC
+    `;
+    for (const ownerRow of owners as Record<string, any>[]) {
+      const ownerEmail = ownerRow.email;
+      if (!ownerEmail) continue;
+      try {
+        await sendOwnerBookingNotificationEmail({
+          to: ownerEmail,
+          ownerName: ownerRow.name || null,
+          reference,
+          shopName: r.shop_name,
+          serviceName: r.service_name || "Car detailing",
+          when,
+          address: r.shop_address || null,
+          customerName: r.customer_name,
+          customerPhone: r.customer_phone || null,
+          amounts,
+        });
+      } catch (e) {
+        console.error(
+          `[arvo:mail] owner notification failed for booking ${bookingId} -> ${ownerEmail}:`,
+          e instanceof Error ? e.message : e,
+        );
+      }
+    }
 
     await db`UPDATE arvo.bookings SET email_sent_at = now() WHERE id = ${bookingId}`;
   } catch (e) {

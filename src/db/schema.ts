@@ -83,6 +83,33 @@ export const CREATE_TABLES: string[] = [
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
 
+  // Payment ledger: one row per booking from the moment the booking is created
+  // (status 'pending') through payment success ('paid') and any later
+  // cancellation/refund ('refunded'). This is the foundation for owner
+  // transaction history + admin analytics (later Phase B work).
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA}.transactions (
+    id                BIGSERIAL PRIMARY KEY,
+    booking_id        BIGINT NOT NULL REFERENCES ${SCHEMA}.bookings(id) ON DELETE CASCADE,
+    shop_id           BIGINT NOT NULL REFERENCES ${SCHEMA}.shops(id),
+    service_id        BIGINT REFERENCES ${SCHEMA}.services(id),
+    customer_id       BIGINT,
+    customer_name     TEXT NOT NULL,
+    customer_email    TEXT NOT NULL,
+    -- Amount split: service price + Stripe fee surcharge = total carded
+    service_cents     INTEGER NOT NULL,
+    fee_cents         INTEGER NOT NULL,
+    total_cents       INTEGER NOT NULL,
+    currency          TEXT NOT NULL DEFAULT 'aud',
+    -- 'pending' at booking creation -> 'paid' on successful card charge.
+    status            TEXT NOT NULL DEFAULT 'pending',
+    payment_method    TEXT,          -- 'card' (demo mode counts as card)
+    payment_intent_id TEXT,          -- Stripe PaymentIntent id (TEST MODE)
+    paid_at           TIMESTAMPTZ,   -- set when status flips to 'paid'
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_arvo_transactions_shop ON ${SCHEMA}.transactions (shop_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_arvo_transactions_booking ON ${SCHEMA}.transactions (booking_id)`,
+
   `CREATE TABLE IF NOT EXISTS ${SCHEMA}.owners (
     id            BIGSERIAL PRIMARY KEY,
     email         TEXT NOT NULL UNIQUE,
@@ -111,6 +138,9 @@ export const ALTER_TABLES: string[] = [
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS seen BOOLEAN NOT NULL DEFAULT false`,
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS customer_id BIGINT`,
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ`,
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS service_cents INTEGER`,
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS fee_cents INTEGER`,
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS total_cents INTEGER`,
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS reminder_email_sent_at TIMESTAMPTZ`,
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS reminder_sms_sent_at TIMESTAMPTZ`,
   `ALTER TABLE ${SCHEMA}.shops ADD COLUMN IF NOT EXISTS schedule JSONB`,
