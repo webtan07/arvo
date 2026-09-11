@@ -1,5 +1,4 @@
 "use client";
-
 import { useState } from "react";
 import {
   Elements,
@@ -9,22 +8,28 @@ import {
 } from "@stripe/react-stripe-js";
 import { loadStripe } from "@stripe/stripe-js";
 import { markBookingPaid } from "~/db/server";
-
+import { formatAUD } from "~/lib/format";
 export interface PaymentInfo {
   mode: "pay_online" | "pay_on_day";
-  amountCents: number;
+  /** service price in cents (not what is carded) */
+  serviceCents?: number;
+  /** Stripe fee surcharge in cents */
+  feeCents?: number;
+  /** total carded in cents (service + fee) */
+  totalCents?: number;
+  /** formatted total, e.g. "A$26.03" */
   amountDisplay: string;
+  /** fee rate summary, e.g. "2.9% + A$0.30" */
+  rateLabel?: string;
   hasKeys: boolean;
   clientSecret?: string;
   publishableKey?: string;
 }
-
 interface Props {
   payment: PaymentInfo;
   bookingId: number;
   onPaid: () => void;
 }
-
 /**
  * Card collection for a pay-online booking.
  * - If real Stripe TEST keys are configured -> live Payment Element.
@@ -36,7 +41,6 @@ export default function PaymentForm({ payment, bookingId, onPaid }: Props) {
       <DemoPayment payment={payment} bookingId={bookingId} onPaid={onPaid} />
     );
   }
-
   const stripePromise = loadStripe(payment.publishableKey);
   return (
     <Elements stripe={stripePromise} options={{ clientSecret: payment.clientSecret }}>
@@ -48,13 +52,37 @@ export default function PaymentForm({ payment, bookingId, onPaid }: Props) {
     </Elements>
   );
 }
-
+/**
+ * Transparent price breakdown: Service · Stripe fee · Total. Rendered above the
+ * card form in both live and demo modes so the customer sees exactly what they
+ * are charged before the card is submitted.
+ */
+function AmountBreakdown({ payment }: { payment: PaymentInfo }) {
+  if (payment.serviceCents == null || payment.feeCents == null || payment.totalCents == null) {
+    return null;
+  }
+  return (
+    <div className="rounded-xl border border-line bg-surface p-4 text-sm">
+      <div className="flex items-center justify-between">
+        <dt className="text-ink-soft">Service</dt>
+        <dd className="font-semibold">{formatAUD(payment.serviceCents)}</dd>
+      </div>
+      <div className="mt-1.5 flex items-center justify-between">
+        <dt className="text-ink-soft">Stripe fee{payment.rateLabel ? ` (${payment.rateLabel})` : ""}</dt>
+        <dd className="font-semibold">{formatAUD(payment.feeCents)}</dd>
+      </div>
+      <div className="mt-1.5 flex items-center justify-between border-t border-line pt-1.5">
+        <dt className="font-bold text-ink">Total due</dt>
+        <dd className="font-display font-extrabold text-brand">{formatAUD(payment.totalCents)}</dd>
+      </div>
+    </div>
+  );
+}
 function LivePayment({ payment, bookingId, onPaid }: Props) {
   const stripe = useStripe();
   const elements = useElements();
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
-
   async function handlePay(e: React.FormEvent) {
     e.preventDefault();
     if (!stripe || !elements) return;
@@ -75,9 +103,9 @@ function LivePayment({ payment, bookingId, onPaid }: Props) {
     await markBookingPaid({ data: bookingId });
     onPaid();
   }
-
   return (
     <form onSubmit={handlePay} className="space-y-4">
+      <AmountBreakdown payment={payment} />
       <div className="rounded-xl border border-line bg-surface p-4">
         <PaymentElement />
       </div>
@@ -88,12 +116,10 @@ function LivePayment({ payment, bookingId, onPaid }: Props) {
     </form>
   );
 }
-
 function DemoPayment({ payment, bookingId, onPaid }: Props) {
   const [card, setCard] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
-
   async function handlePay(e: React.FormEvent) {
     e.preventDefault();
     setProcessing(true);
@@ -103,9 +129,9 @@ function DemoPayment({ payment, bookingId, onPaid }: Props) {
     await markBookingPaid({ data: bookingId });
     onPaid();
   }
-
   return (
     <form onSubmit={handlePay} className="space-y-4">
+      <AmountBreakdown payment={payment} />
       <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">
         <p className="font-bold">Demo payment mode</p>
         <p className="mt-1">

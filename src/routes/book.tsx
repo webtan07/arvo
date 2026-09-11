@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { getShop, getSlotGrid, createBooking } from "~/db/server";
-import type { CreateBookingResult, GridSlot, ServiceRow, ShopRow } from "~/db/server";
+import { getShop, getSlotGrid, createBooking, getFeeSchedule } from "~/db/server";
+import type { CreateBookingResult, FeeSchedule, GridSlot, ServiceRow, ShopRow } from "~/db/server";
 import { getSessionUser } from "~/db/auth";
 import type { SessionUser } from "~/db/auth";
 import { getSessionToken } from "~/lib/session";
 import { formatDuration, formatAUD, formatSlotDate, formatTime } from "~/lib/format";
+import { calculateFees } from "~/lib/fees";
 import PaymentForm from "~/components/PaymentForm";
 
 export const Route = createFileRoute("/book")({
@@ -25,6 +26,7 @@ function BookPage() {
   const [shopData, setShopData] = useState<{ shop: ShopRow; services: ServiceRow[] } | null>(null);
   const [slots, setSlots] = useState<GridSlot[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [feeSchedule, setFeeSchedule] = useState<FeeSchedule | null>(null);
 
   const [step, setStep] = useState<Step>("slot");
   const [slotId, setSlotId] = useState<string | null>(null);
@@ -65,9 +67,10 @@ function BookPage() {
     let active = true;
     (async () => {
       try {
-        const [shopResult, slotResult] = await Promise.all([
+        const [shopResult, slotResult, feeResult] = await Promise.all([
           getShop({ data: shopSlug }),
           getSlotGrid({ data: { shopSlug } }),
+          getFeeSchedule(),
         ]);
         if (!active) return;
         if (!shopResult) {
@@ -76,6 +79,7 @@ function BookPage() {
         }
         setShopData(shopResult);
         setSlots(slotResult);
+        setFeeSchedule(feeResult);
       } catch (e) {
         if (active) setLoadError(e instanceof Error ? e.message : String(e));
       }
@@ -336,6 +340,42 @@ function BookPage() {
                 <span className="font-semibold text-brand">{formatAUD(service.price_cents)}</span>
               </p>
             )}
+
+            {/* Transparent breakdown before the customer commits: this is the
+                exact split the server will charge (service + Stripe fee). */}
+            {feeSchedule && (
+              <div className="rounded-xl border border-line bg-surface p-4 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-ink-soft">Service</span>
+                  <span className="font-semibold">{formatAUD(service.price_cents)}</span>
+                </div>
+                <div className="mt-1.5 flex items-center justify-between">
+                  <span className="text-ink-soft">
+                    Stripe fee ({feeSchedule.rateLabel})
+                  </span>
+                  <span className="font-semibold">
+                    {formatAUD(
+                      calculateFees(service.price_cents, {
+                        percent: feeSchedule.percent,
+                        fixedCents: feeSchedule.fixedCents,
+                      }).feeCents,
+                    )}
+                  </span>
+                </div>
+                <div className="mt-1.5 flex items-center justify-between border-t border-line pt-1.5">
+                  <span className="font-bold text-ink">Total due</span>
+                  <span className="font-display font-extrabold text-brand">
+                    {formatAUD(
+                      calculateFees(service.price_cents, {
+                        percent: feeSchedule.percent,
+                        fixedCents: feeSchedule.fixedCents,
+                      }).totalCents,
+                    )}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {createErr && <p className="text-sm text-red-600">{createErr}</p>}
 
             {!created && (

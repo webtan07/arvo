@@ -43,7 +43,13 @@ function ConfirmPage() {
             <Row label="Email" value={booking.customer_email} />
             {booking.customer_phone && <Row label="Phone" value={booking.customer_phone} />}
             {paidOnline && (
-              <Row label="Payment" value={`Paid online (${formatAUD(booking.priceCents ?? 0)})`} />
+              <>
+                <Row label="Booking price" value={formatAUD(booking.service_cents ?? booking.priceCents ?? 0)} />
+                {booking.total_cents != null && booking.fee_cents != null && (
+                  <Row label="Stripe fee" value={formatAUD(booking.fee_cents)} />
+                )}
+                <Row label="Total paid" value={formatAUD(booking.total_cents ?? booking.priceCents ?? 0)} />
+              </>
             )}
           </dl>
         </div>
