@@ -53,7 +53,7 @@ function ForgotPasswordPage() {
       <div className="card p-6">
         <h1 className="font-display text-2xl font-extrabold">Forgot your password?</h1>
         <p className="mt-1 text-sm text-ink-soft">
-          Enter the email on your {isOwner ? "shop owner" : ""} account and we'll email you a
+          Enter the email on your {isOwner ? "mobile business" : ""} account and we'll email you a
           reset link.
         </p>
 

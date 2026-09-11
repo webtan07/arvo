@@ -93,11 +93,11 @@ export async function sendBookingConfirmationEmail(
     <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto;padding:24px;">
       <p style="font-size:13px;letter-spacing:.15em;color:#B45309;text-transform:uppercase;font-weight:bold;">Arvo · Car Detailing</p>
       <h1 style="font-size:24px;line-height:1.3;margin:8px 0 4px;">Your booking is confirmed</h1>
-      <p style="font-size:15px;color:#4b5563;">Thanks ${data.to ? "" : ""}— we've reserved your appointment. See you at the shop!</p>
+      <p style="font-size:15px;color:#4b5563;">Thanks ${data.to ? "" : ""}— we've reserved your appointment. See you soon!</p>
       <div style="background:#FFF7ED;border:1px solid #FDE1BC;border-radius:14px;padding:20px;margin:20px 0;">
         <table style="width:100%;border-collapse:collapse;font-size:14px;">
           <tr><td style="padding:6px 0;color:#6b7280;">Reference</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.reference}</td></tr>
-          <tr><td style="padding:6px 0;color:#6b7280;">Shop</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.shopName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Detailer</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.shopName}</td></tr>
           <tr><td style="padding:6px 0;color:#6b7280;">Service</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.serviceName}</td></tr>
           <tr><td style="padding:6px 0;color:#6b7280;">When</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${when}</td></tr>
           ${address ? `<tr><td style="padding:6px 0;color:#6b7280;">Address</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${address}</td></tr>` : ""}
@@ -113,7 +113,7 @@ Arvo · Car Detailing
 Your booking is confirmed.
 
 Reference: ${data.reference}
-Shop:      ${data.shopName}
+Detailer:  ${data.shopName}
 Service:   ${data.serviceName}
 When:      ${when}${address ? `\nAddress:   ${address}` : ""}
 
@@ -172,20 +172,20 @@ export async function sendBookingReminderEmail(
       <div style="background:#FFF7ED;border:1px solid #FDE1BC;border-radius:14px;padding:20px;margin:20px 0;">
         <table style="width:100%;border-collapse:collapse;font-size:14px;">
           <tr><td style="padding:6px 0;color:#6b7280;">Reference</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.reference}</td></tr>
-          <tr><td style="padding:6px 0;color:#6b7280;">Shop</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.shopName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280;">Detailer</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.shopName}</td></tr>
           <tr><td style="padding:6px 0;color:#6b7280;">Service</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${data.serviceName}</td></tr>
           <tr><td style="padding:6px 0;color:#6b7280;">When</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${when}</td></tr>
           ${address ? `<tr><td style="padding:6px 0;color:#6b7280;">Address</td><td style="padding:6px 0;text-align:right;font-weight:bold;">${address}</td></tr>` : ""}
         </table>
       </div>
-      <p style="font-size:13px;color:#9ca3af;">No action needed — this is just a friendly heads-up. If you need to reschedule, get in touch with the shop.</p>
+      <p style="font-size:13px;color:#9ca3af;">No action needed — this is just a friendly heads-up. If you need to reschedule, get in touch with the detailer.</p>
     </div>
   `.trim();
   const text = `
 Arvo · Car Detailing
 Just a reminder — your appointment is ${lead}.
 Reference: ${data.reference}
-Shop:      ${data.shopName}
+Detailer:  ${data.shopName}
 Service:   ${data.serviceName}
 When:      ${when}${address ? `\nAddress:   ${address}` : ""}
 No action needed — this is just a friendly heads-up.
@@ -220,7 +220,7 @@ export async function sendPasswordResetEmail(
   data: PasswordResetData,
 ): Promise<unknown> {
   const fromUser = senderEmail();
-  const label = data.kind === "owner" ? "Arvo shop owner" : "Arvo";
+  const label = data.kind === "owner" ? "Arvo Mobile Business" : "Arvo";
   const html = `
     <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto;padding:24px;">
       <p style="font-size:13px;letter-spacing:.15em;color:#B45309;text-transform:uppercase;font-weight:bold;">Arvo · Car Detailing</p>

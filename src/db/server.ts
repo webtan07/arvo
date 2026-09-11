@@ -268,7 +268,7 @@ export const createBooking = createServerFn()
 
       // Resolve shop + service.
       const shops = await db`SELECT * FROM arvo.shops WHERE slug = ${data.shopSlug}`;
-      if (shops.length === 0) return { ok: false, error: "Shop not found." };
+      if (shops.length === 0) return { ok: false, error: "Mobile service not found." };
       const shop = shops[0] as Record<string, any>;
       const shopId = Number(shop.id);
 
@@ -558,10 +558,10 @@ export const createShopForOwner = createServerFn()
     async ({ data }): Promise<{ ok: boolean; error?: string; slug?: string; shopId?: number }> => {
       const user = await resolveSessionUser(data.token);
       if (!user || user.role !== "owner") {
-        return { ok: false, error: "You must be signed in as a shop owner." };
+        return { ok: false, error: "You must be signed in as a mobile business." };
       }
       if (!data.shop.name || !data.shop.address) {
-        return { ok: false, error: "Shop name and address are required." };
+        return { ok: false, error: "Business name and address are required." };
       }
       const db = sql();
       const branch = await createOwnerShopBranch(db, {

@@ -46,7 +46,7 @@ function DashboardPage() {
   if (access === "loading") {
     return (
       <div className="mx-auto max-w-4xl px-5 py-16 text-center text-ink-soft">
-        Checking shop access…
+        Checking access…
       </div>
     );
   }
@@ -55,23 +55,23 @@ function DashboardPage() {
   if (access === "guest") {
     return (
       <div className="mx-auto max-w-2xl px-5 py-16 text-center">
-        <p className="text-xs uppercase tracking-wide text-ink-soft">Shop dashboard</p>
+        <p className="text-xs uppercase tracking-wide text-ink-soft">Service dashboard</p>
         <h1 className="mt-2 font-display text-3xl font-extrabold">Owner login required</h1>
         <p className="mx-auto mt-3 max-w-md text-ink-soft">
-          This dashboard shows a shop's bookings and notifications. Sign in with
-          the shop owner account to continue.
+          This dashboard shows your mobile business's bookings and notifications. Sign in with
+          the mobile business account to continue.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link to="/owner/login" className="btn">
-            Shop owner login
+            Mobile business login
           </Link>
           <Link to="/owner/register" className="btn-outline">
-            Register your shop
+            Register your business
           </Link>
         </div>
         <p className="mt-6 text-sm text-ink-soft">
           <Link to="/" className="text-brand hover:text-brand-dark">
-            ← Browse shops
+            ← Browse services
           </Link>
         </p>
       </div>
@@ -84,8 +84,8 @@ function DashboardPage() {
       <div className="mx-auto max-w-2xl px-5 py-16 text-center">
         <h1 className="font-display text-3xl font-extrabold">Access denied</h1>
         <p className="mx-auto mt-3 max-w-md text-ink-soft">
-          Your account doesn't have permission to view this shop's dashboard.
-          Sign in with the shop owner account that owns this shop.
+          Your account doesn't have permission to view this business's dashboard.
+          Sign in with the mobile business account that owns it.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link to="/owner/login" className="btn">
@@ -95,7 +95,7 @@ function DashboardPage() {
         </div>
         <p className="mt-6 text-sm text-ink-soft">
           <Link to="/" className="text-brand hover:text-brand-dark">
-            ← Browse shops
+            ← Browse services
           </Link>
         </p>
       </div>
@@ -107,9 +107,9 @@ function DashboardPage() {
   if (!d.shop) {
     return (
       <div className="mx-auto max-w-2xl px-5 py-16 text-center">
-        <p className="text-lg font-semibold">Shop not found.</p>
+        <p className="text-lg font-semibold">Business not found.</p>
         <p className="mt-2 text-sm text-ink-soft">
-          Dashboards are addressed per shop, e.g.{" "}
+          Dashboards are addressed per business, e.g.{" "}
           <code className="rounded bg-surface px-1">/dashboard/&lt;shop-slug&gt;</code>
         </p>
       </div>
@@ -140,7 +140,7 @@ function DashboardPage() {
     <div className="mx-auto max-w-4xl px-5 py-8">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-xs uppercase tracking-wide text-ink-soft">Shop dashboard</p>
+          <p className="text-xs uppercase tracking-wide text-ink-soft">Service dashboard</p>
           <h1 className="font-display text-3xl font-extrabold">{d.shop.name}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-3">

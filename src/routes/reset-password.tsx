@@ -69,7 +69,7 @@ function ResetPasswordPage() {
     <div className="mx-auto max-w-md px-5 py-12">
       <div className="card p-6">
         <p className="text-xs uppercase tracking-wide text-ink-soft">
-          {isOwner ? "Shop owners" : ""}
+          {isOwner ? "Mobile businesses" : ""}
         </p>
         <h1 className="mt-1 font-display text-2xl font-extrabold">Choose a new password</h1>
         <p className="mt-1 text-sm text-ink-soft">

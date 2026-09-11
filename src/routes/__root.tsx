@@ -40,7 +40,7 @@ function RootDocument() {
             </Link>
             <nav className="flex items-center gap-4 text-sm font-semibold text-ink-soft">
               <Link to="/" className="hover:text-brand">
-                Shops
+                Mobile services
               </Link>
               {/* Owner → their shop dashboard; customer/guest → My Bookings. */}
               {isOwner ? (
@@ -71,7 +71,7 @@ function RootDocument() {
                 )
               ) : (
                 <Link to="/owner/login" className="hover:text-brand">
-                  For detailers
+                  Mobile Businesses
                 </Link>
               )}
               <span className="hidden rounded-full bg-brand px-3 py-1 text-xs font-bold text-white sm:inline">

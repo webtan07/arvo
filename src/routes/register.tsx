@@ -117,7 +117,7 @@ function RegisterPage() {
 
       <p className="mt-6 text-center text-sm text-ink-soft">
         <Link to="/" className="hover:text-brand">
-          ← Browse shops
+          ← Browse services
         </Link>
       </p>
     </div>

@@ -321,7 +321,7 @@ export const registerOwner = createServerFn()
       return { ok: false, error: "Password must be at least 8 characters." };
     }
     if (!data.shop.name || !data.shop.address) {
-      return { ok: false, error: "Shop name and address are required." };
+      return { ok: false, error: "Business name and address are required." };
     }
     const existing = await db`SELECT id FROM arvo.owners WHERE email = ${email}`;
     if (existing.length > 0) {
