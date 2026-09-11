@@ -39,7 +39,7 @@ function OwnerLoginPage() {
   if (checking && session.status !== "owner") {
     return (
       <div className="mx-auto max-w-md px-5 py-12 text-center text-ink-soft">
-        <p className="text-xs uppercase tracking-wide text-ink-soft">Shop owners</p>
+        <p className="text-xs uppercase tracking-wide text-ink-soft">Mobile businesses</p>
         <h1 className="mt-2 font-display text-2xl font-extrabold">Owner login</h1>
         <p className="mt-6">Checking your session…</p>
       </div>
@@ -72,10 +72,10 @@ function OwnerLoginPage() {
   return (
     <div className="mx-auto max-w-md px-5 py-12">
       <div className="card p-6">
-        <p className="text-xs uppercase tracking-wide text-ink-soft">Shop owners</p>
+        <p className="text-xs uppercase tracking-wide text-ink-soft">Mobile businesses</p>
         <h1 className="mt-1 font-display text-2xl font-extrabold">Owner login</h1>
         <p className="mt-1 text-sm text-ink-soft">
-          Sign in to manage your shop's dashboard and bookings.
+          Sign in to manage your business's dashboard and bookings.
         </p>
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-4">
@@ -90,7 +90,7 @@ function OwnerLoginPage() {
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@yourshop.com.au"
+              placeholder="you@yourbusiness.com.au"
               required
             />
           </div>
@@ -122,9 +122,9 @@ function OwnerLoginPage() {
           {error && <p className="text-sm font-semibold text-red-600">{error}</p>}
           {noShop && (
             <p className="rounded-xl bg-amber-100 p-3 text-sm text-amber-700">
-              Your account doesn't have a shop yet.{" "}
+              Your account doesn't have a business yet.{" "}
               <Link to="/owner/register" className="font-bold underline">
-                Set up your shop
+                Set up your business
               </Link>
               .
             </p>
@@ -138,7 +138,7 @@ function OwnerLoginPage() {
         <p className="mt-5 text-center text-sm text-ink-soft">
           New to Arvo?{" "}
           <Link to="/owner/register" className="font-bold text-brand hover:text-brand-dark">
-            Register your shop
+            Register your business
           </Link>
         </p>
       </div>
@@ -149,7 +149,7 @@ function OwnerLoginPage() {
         </Link>{" "}
         ·{" "}
         <Link to="/" className="hover:text-brand">
-          Browse shops
+          Browse services
         </Link>
       </div>
     </div>

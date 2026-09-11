@@ -71,7 +71,7 @@ function BookPage() {
         ]);
         if (!active) return;
         if (!shopResult) {
-          setLoadError("Shop not found.");
+          setLoadError("Mobile service not found.");
           return;
         }
         setShopData(shopResult);
@@ -113,7 +113,7 @@ function BookPage() {
     return (
       <div className="mx-auto max-w-2xl px-5 py-16 text-center">
         <p className="text-lg font-semibold text-red-600">{loadError}</p>
-        <Link to="/" className="btn mt-4">Browse shops</Link>
+        <Link to="/" className="btn mt-4">Browse services</Link>
       </div>
     );
   }

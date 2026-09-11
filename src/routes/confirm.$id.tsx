@@ -14,7 +14,7 @@ function ConfirmPage() {
     return (
       <div className="mx-auto max-w-2xl px-5 py-16 text-center">
         <p className="text-lg font-semibold">Booking not found.</p>
-        <Link to="/" className="btn mt-4">Browse shops</Link>
+        <Link to="/" className="btn mt-4">Browse services</Link>
       </div>
     );
   }
@@ -34,7 +34,7 @@ function ConfirmPage() {
         </div>
         <div className="p-6">
           <dl className="space-y-3 text-sm">
-            <Row label="Shop" value={booking.shopName} />
+            <Row label="Detailer" value={booking.shopName} />
             <Row label="Service" value={booking.serviceName || "—"} />
             {booking.slotStartsAt && (
               <Row label="When" value={formatDateTime(booking.slotStartsAt)} />
@@ -50,7 +50,7 @@ function ConfirmPage() {
       </div>
       <div className="mt-6 rounded-2xl border border-line bg-surface p-5 text-sm text-ink-soft">
         {paidOnline ? (
-          <p>Thank you! Your card payment was successful. See you at the shop.</p>
+          <p>Thank you! Your card payment was successful. See you soon!</p>
         ) : (
           <p>Your payment is being processed — we'll confirm shortly.</p>
         )}
@@ -64,7 +64,7 @@ function ConfirmPage() {
           My bookings
         </Link>
         <Link to="/shop/$slug" params={{ slug: booking.shopSlug }} className="btn-outline">
-          Back to shop
+          Back to service
         </Link>
       </div>
     </div>

@@ -61,8 +61,8 @@ function HomePage() {
             Book your <span className="text-brand">detail</span>, not your time.
           </h1>
           <p className="mx-auto mt-5 max-w-xl text-lg text-ink-soft">
-            Arvo is a home for the best car-detailing shops. Pick a shop, choose
-            a service and grab a slot — pay securely online.
+            Arvo is a home for the best mobile car detailers. Pick a detailer,
+            choose a service and grab a slot — pay securely online.
           </p>
 
           {/* Prominent, centered search widget */}
@@ -88,10 +88,10 @@ function HomePage() {
               <input
                 type="search"
                 className="w-full border-none bg-transparent py-2 text-sm text-ink outline-none placeholder:text-ink-soft"
-                placeholder="Search by shop, town or service (e.g. ceramic, valet)…"
+                placeholder="Search by detailer, town or service (e.g. ceramic, valet)…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                aria-label="Search shops"
+                aria-label="Search mobile services"
               />
             </div>
             <button type="submit" className="btn shrink-0 whitespace-nowrap">
@@ -100,9 +100,9 @@ function HomePage() {
           </form>
           <p className="mt-3 text-sm text-ink-soft">
             {submitted
-              ? `${filtered.length} ${filtered.length === 1 ? "shop" : "shops"} match "${
-                  query.trim() || "all"
-                }"`
+              ? `${filtered.length} ${
+                  filtered.length === 1 ? "mobile service" : "mobile services"
+                } match "${query.trim() || "all"}"`
               : `${shops.length} detailers across Australia — book in under a minute.`}
           </p>
         </div>
@@ -156,14 +156,14 @@ function HomePage() {
         <div className="mb-6 flex items-center justify-between">
           <h2 className="font-display text-2xl font-bold">All detailers</h2>
           <span className="text-sm text-ink-soft">
-            {filtered.length} {filtered.length === 1 ? "shop" : "shops"}
+            {filtered.length} {filtered.length === 1 ? "mobile service" : "mobile services"}
             {query.trim() ? " found" : ""}
           </span>
         </div>
 
         {error && (
           <p className="rounded-xl bg-red-50 p-4 text-sm text-red-700">
-            Could not load shops: {error}
+            Could not load mobile services: {error}
           </p>
         )}
 
@@ -206,13 +206,13 @@ function HomePage() {
 
         {filtered.length === 0 && !error && (
           <p className="rounded-xl bg-surface p-6 text-center text-ink-soft">
-            No shops match “{query}”. Try a different search.
+            No mobile services match “{query}”. Try a different search.
           </p>
         )}
 
         {shops.length === 0 && !error && (
           <p className="rounded-xl bg-surface p-6 text-center text-ink-soft">
-            No shops yet — seed data hasn't been applied.
+            No mobile services yet — seed data hasn't been applied.
           </p>
         )}
       </section>

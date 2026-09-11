@@ -55,7 +55,7 @@ function OwnerRegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const steps = ["Your details", "Shop & hours", "Services", "Photos"];
+  const steps = ["Your details", "Business & hours", "Services", "Photos"];
 
   // An owner who is ALREADY signed in shouldn't be asked to register again — send
   // them to their shop dashboard (slug resolved server-side). An owner whose shop
@@ -119,8 +119,8 @@ function OwnerRegisterPage() {
 
   return (
     <div className="mx-auto max-w-2xl px-5 py-12">
-      <p className="text-xs uppercase tracking-wide text-ink-soft">Shop owners</p>
-      <h1 className="mt-1 font-display text-2xl font-extrabold">List your shop on Arvo</h1>
+      <p className="text-xs uppercase tracking-wide text-ink-soft">Mobile businesses</p>
+      <h1 className="mt-1 font-display text-2xl font-extrabold">List your mobile business on Arvo</h1>
       <p className="mt-1 text-sm text-ink-soft">
         Set up your detailer profile, your services and your hours — then head
         straight to your dashboard.
@@ -188,7 +188,7 @@ function OwnerRegisterPage() {
                   autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@yourshop.com.au"
+                  placeholder="you@yourbusiness.com.au"
                   required
                 />
               </div>
@@ -215,7 +215,7 @@ function OwnerRegisterPage() {
             <>
               <div>
                 <label className="mb-1 block text-sm font-semibold" htmlFor="shopName">
-                  Shop name
+                  Business name
                 </label>
                 <input
                   id="shopName"
@@ -243,7 +243,7 @@ function OwnerRegisterPage() {
               </div>
               <div>
                 <label className="mb-1 block text-sm font-semibold" htmlFor="desc">
-                  About your shop <span className="font-normal text-ink-soft">(optional)</span>
+                  About your business <span className="font-normal text-ink-soft">(optional)</span>
                 </label>
                 <textarea
                   id="desc"
@@ -379,14 +379,14 @@ function OwnerRegisterPage() {
             <>
               <div>
                 <label className="mb-1 block text-sm font-semibold" htmlFor="photos">
-                  Shop photos <span className="font-normal text-ink-soft">(optional)</span>
+                  Business photos <span className="font-normal text-ink-soft">(optional)</span>
                 </label>
                 <textarea
                   id="photos"
                   className="input min-h-24"
                   value={photosText}
                   onChange={(e) => setPhotosText(e.target.value)}
-                  placeholder={"One image URL per line\nhttps://…/your-shop-1.jpg\nhttps://…/your-shop-2.jpg"}
+                  placeholder={"One image URL per line\nhttps://…/your-business-1.jpg\nhttps://…/your-business-2.jpg"}
                 />
                 <p className="mt-1 text-xs text-ink-soft">
                   Leave blank to use the default Arvo placeholder gallery.
@@ -396,7 +396,7 @@ function OwnerRegisterPage() {
               <div className="rounded-xl bg-surface p-4 text-sm">
                 <p className="mb-1 font-bold">Review</p>
                 <p>
-                  <span className="text-ink-soft">Shop:</span>{" "}
+                  <span className="text-ink-soft">Business:</span>{" "}
                   {shopName.trim() || businessName.trim() || "—"}
                 </p>
                 <p>
@@ -431,7 +431,7 @@ function OwnerRegisterPage() {
             </button>
           ) : (
             <button className="btn" type="submit" disabled={submitting}>
-              {submitting ? "Creating your shop…" : "Create my shop"}
+              {submitting ? "Creating your business…" : "Create my business"}
             </button>
           )}
         </div>
@@ -439,7 +439,7 @@ function OwnerRegisterPage() {
 
       <p className="mt-6 text-center text-sm text-ink-soft">
         <Link to="/" className="hover:text-brand">
-          ← Back to browsing shops
+          ← Back to browsing services
         </Link>
       </p>
     </div>

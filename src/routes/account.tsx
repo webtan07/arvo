@@ -84,7 +84,7 @@ function AccountPage() {
         </div>
         <p className="mt-6 text-sm text-ink-soft">
           <Link to="/" className="text-brand hover:text-brand-dark">
-            ← Browse shops
+            ← Browse services
           </Link>
         </p>
       </div>
@@ -124,7 +124,7 @@ function AccountPage() {
             bookings will show up here.
           </p>
           <Link to="/" className="btn mt-5">
-            Browse shops
+            Browse services
           </Link>
         </div>
       ) : (

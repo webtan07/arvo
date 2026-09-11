@@ -22,9 +22,9 @@ function ShopPage() {
   if (!data) {
     return (
       <div className="mx-auto max-w-3xl px-5 py-16 text-center">
-        <p className="text-lg font-semibold">Shop not found.</p>
+        <p className="text-lg font-semibold">Mobile service not found.</p>
         <Link to="/" className="btn mt-4">
-          Back to shops
+          Back to services
         </Link>
       </div>
     );
@@ -81,7 +81,7 @@ function ShopPage() {
           {shop.address && <p className="mt-1 text-ink-soft">{shop.address}</p>}
         </div>
         <Link to="/" className="text-sm font-semibold text-brand hover:underline">
-          ← All shops
+          ← All mobile services
         </Link>
       </div>
 
