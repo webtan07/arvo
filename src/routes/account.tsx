@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { getSessionUser, logout } from "~/db/auth";
-import { getMyBookings, getCustomerCredits } from "~/db/server";
+import { getMyBookings, getCustomerCredits, getCompletionPhoto } from "~/db/server";
 import type { BookingView, CustomerCreditsResult } from "~/db/server";
 import type { SessionUser } from "~/db/auth";
 import { clearSessionToken, getSessionToken } from "~/lib/session";
-import { formatDateTime, formatAUD } from "~/lib/format";
+import { formatDateTime, formatAUD, formatCreated } from "~/lib/format";
 import CancellationAction from "~/components/CancellationAction";
 
 export const Route = createFileRoute("/account")({
@@ -328,6 +328,60 @@ function BookingCard({ b }: { b: BookingView }) {
           <ReminderBadge b={b} />
         </div>
       </div>
+      {/* Completed bookings: serviced-vehicle photo + review link (Phase B parts 3–4). */}
+      {b.status === "completed" && <CompletedReviewSection b={b} />}
+    </div>
+  );
+}
+
+/**
+ * For a completed booking: the photo of the serviced vehicle (fetched on demand
+ * via getCompletionPhoto — the data URL is excluded from booking list payloads)
+ * and the review entry point: "Leave a review" until the customer has reviewed,
+ * then "Your review" (the /review/<id> page shows their stored review).
+ */
+function CompletedReviewSection({ b }: { b: BookingView }) {
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const token = getSessionToken();
+    if (!token) return;
+    getCompletionPhoto({ data: { token, bookingId: b.id } })
+      .then((res) => {
+        if (active && res.ok && res.photoUrl) setPhotoUrl(res.photoUrl);
+      })
+      .catch(() => {
+        // Non-fatal: the photo simply doesn't render.
+      });
+    return () => {
+      active = false;
+    };
+  }, [b.id]);
+
+  return (
+    <div className="mt-4 border-t border-line pt-4">
+      {b.completed_at && (
+        <p className="text-xs text-ink-soft">
+          Completed {formatCreated(b.completed_at)}
+        </p>
+      )}
+      {photoUrl && (
+        <img
+          src={photoUrl}
+          alt="Your serviced vehicle"
+          className="mt-2 max-h-60 rounded-xl border border-line object-contain"
+        />
+      )}
+      <div className="mt-3">
+        <Link
+          to="/review/$id"
+          params={{ id: String(b.id) }}
+          className={`btn ${b.reviewed ? "btn-outline" : ""}`}
+        >
+          {b.reviewed ? "Your review" : "Leave a review"}
+        </Link>
+      </div>
     </div>
   );
 }
@@ -336,6 +390,7 @@ function StatusBadge({ b, cancelled }: { b: BookingView; cancelled: boolean }) {
   if (cancelled) return <span className="chip bg-surface text-ink-soft">Cancelled</span>;
   if (b.status === "confirmed") return <span className="chip bg-green-100 text-green-700">Confirmed</span>;
   if (b.status === "rescheduled") return <span className="chip bg-green-100 text-green-700">Rescheduled</span>;
+  if (b.status === "completed") return <span className="chip bg-green-100 text-green-700">Completed</span>;
   if (b.status === "awaiting_payment") return <span className="chip bg-amber-100 text-amber-700">Awaiting payment</span>;
   return <span className="chip bg-surface text-ink-soft">{b.status}</span>;
 }

@@ -98,6 +98,12 @@ export interface BookingRow {
   completed_at: string | null;
   /** stamped when the completion email (photo + review link) was sent */
   completion_email_sent_at: string | null;
+  /**
+   * true once the customer left a review for this completed booking (Phase B
+   * part 4). Only meaningful for 'completed' bookings in customer views —
+   * dashboard queries don't join reviews, so the flag defaults to false there.
+   */
+  reviewed: boolean;
   created_at: string;
 }
 
@@ -170,6 +176,7 @@ function rowToBookingView(r: Record<string, any>): BookingView {
       r.email_sent_at == null ? null : r.email_sent_at instanceof Date
         ? r.email_sent_at.toISOString()
         : r.email_sent_at,
+    reviewed: Boolean(r.reviewed),
     created_at: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
     shopName: r.shop_name,
     shopSlug: r.shop_slug,
@@ -863,11 +870,13 @@ export const getMyBookings = createServerFn()
     const rows = await db`
       SELECT ${BOOKING_VIEW_COLUMNS}, s.name AS shop_name, s.slug AS shop_slug,
              sv.name AS service_name, sv.duration_min, sv.price_cents,
-             sl.starts_at AS slot_starts, sl.ends_at AS slot_ends
+             sl.starts_at AS slot_starts, sl.ends_at AS slot_ends,
+             (rv.id IS NOT NULL) AS reviewed
       FROM arvo.bookings b
       JOIN arvo.shops s ON s.id = b.shop_id
       LEFT JOIN arvo.services sv ON sv.id = b.service_id
       LEFT JOIN arvo.slots sl ON sl.id = b.slot_id
+      LEFT JOIN arvo.reviews rv ON rv.booking_id = b.id
       WHERE b.customer_id = ${user.id}
       ORDER BY COALESCE(sl.starts_at, b.created_at) DESC
     `;
@@ -1470,7 +1479,11 @@ export const cancelBookingByOwner = createServerFn()
         if (user.shopId == null || user.shopId !== Number(b.shop_id)) {
           return { ok: false, error: "You can only cancel bookings for your own business." };
         }
-        const cancellable = ["pending", "awaiting_payment", "confirmed"];
+        // 'rescheduled' is cancellable too — a booking the owner already
+        // cancelled once (and the customer rebooked) is still an active future
+        // appointment the owner may cancel again; the reschedule-or-credit
+        // flow the customer is emailed works the same.
+        const cancellable = ["pending", "awaiting_payment", "confirmed", "rescheduled"];
         if (!cancellable.includes(String(b.status))) {
           return { ok: false, error: "This booking is not active and can't be cancelled." };
         }
@@ -1483,7 +1496,7 @@ export const cancelBookingByOwner = createServerFn()
               cancelled_at = now(),
               cancel_decision_token = ${decisionToken}
           WHERE id = ${data.bookingId}
-            AND status IN ('pending', 'awaiting_payment', 'confirmed')
+            AND status IN ('pending', 'awaiting_payment', 'confirmed', 'rescheduled')
           RETURNING *
         `;
         if (updated.length === 0) {
@@ -1835,3 +1848,252 @@ export const getOwnerTransactions = createServerFn()
       return { access: "ok", rows: out };
     },
   );
+
+/* ═══════════════════════════════════════════════════════════════
+ * Phase B part 4 — customer reviews per mobile service
+ *
+ * Rules (enforced server-side):
+ *   - A review exists ONLY for a booking the owner marked 'completed' — the
+ *     customer gets the /review/<bookingId> link in their completion email
+ *     (reviewPath() in src/lib/images.ts is the single source of the path).
+ *   - ONLY the booking's own customer can review: a logged-in CUSTOMER session
+ *     whose email matches bookings.customer_email (or whose customer_id matches
+ *     bookings.customer_id — covers the common book-as-guest-then-register
+ *     flow). Owners and other customers are rejected.
+ *   - ONE review per booking (booking_id UNIQUE constraint + server re-check),
+ *     so a double-tap or a second link open can never insert twice; the review
+ *     link then shows "You've already reviewed this service".
+ *   - rating 1–5 (integer, validated); comment REQUIRED, trimmed, 10–2000 chars.
+ * ═══════════════════════════════════════════════════════════════ */
+
+export interface ReviewRow {
+  id: number;
+  booking_id: number;
+  shop_id: number;
+  service_id: number | null;
+  customer_id: number | null;
+  customer_name: string;
+  customer_email: string;
+  /** integer 1–5 */
+  rating: number;
+  comment: string;
+  created_at: string;
+}
+
+function rowToReview(r: Record<string, any>): ReviewRow {
+  return {
+    id: Number(r.id),
+    booking_id: Number(r.booking_id),
+    shop_id: Number(r.shop_id),
+    service_id: r.service_id == null ? null : Number(r.service_id),
+    customer_id: r.customer_id == null ? null : Number(r.customer_id),
+    customer_name: r.customer_name,
+    customer_email: r.customer_email,
+    rating: Number(r.rating),
+    comment: r.comment,
+    created_at: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+  };
+}
+
+/**
+ * True when the session (if any) belongs to the customer who owns the booking:
+ * a CUSTOMER whose customer_id matches the booking, or whose email matches
+ * bookings.customer_email (guests who later registered with the same email).
+ * Owners never pass — reviews are customers-only.
+ */
+async function isBookingCustomer(
+  b: Record<string, any>,
+  token: string | undefined,
+): Promise<boolean> {
+  if (!token) return false;
+  const user = await resolveSessionUser(token);
+  if (!user || user.role !== "customer") return false;
+  if (b.customer_id != null && Number(b.customer_id) === user.id) return true;
+  return user.email.toLowerCase() === String(b.customer_email).toLowerCase();
+}
+
+export interface ReviewPageBooking {
+  id: number;
+  reference: string;
+  shopName: string;
+  shopSlug: string;
+  serviceId: number | null;
+  serviceName: string | null;
+}
+
+export interface ReviewPageData {
+  ok: boolean;
+  error?: string;
+  /** true when the caller is the booking's own customer AND may review now */
+  canReview?: boolean;
+  /** true when this booking already has a review (shown instead of the form) */
+  alreadyReviewed?: boolean;
+  booking?: ReviewPageBooking;
+  /** the existing review (present when alreadyReviewed) */
+  review?: ReviewRow;
+}
+
+/**
+ * Context for /review/<bookingId> (the link in the service-completed email).
+ * Server-enforced access: the booking must exist, must be 'completed', and the
+ * caller (session token) must be the booking's own customer. Short-circuits
+ * with "already reviewed" once a review row exists — the form is never shown.
+ */
+export const getReviewPage = createServerFn()
+  .validator((d: { bookingId: number; token?: string }) => d)
+  .handler(async ({ data }): Promise<ReviewPageData> => {
+    const db = sql();
+    const rows = await db`
+      SELECT b.*, s.name AS shop_name, s.slug AS shop_slug, sv.name AS service_name
+      FROM arvo.bookings b
+      JOIN arvo.shops s ON s.id = b.shop_id
+      LEFT JOIN arvo.services sv ON sv.id = b.service_id
+      WHERE b.id = ${data.bookingId}
+    `;
+    if (rows.length === 0) return { ok: false, error: "Booking not found." };
+    const b = rows[0] as Record<string, any>;
+    const booking: ReviewPageBooking = {
+      id: Number(b.id),
+      reference: `ARVO-${String(Number(b.id)).padStart(4, "0")}`,
+      shopName: b.shop_name,
+      shopSlug: b.shop_slug,
+      serviceId: b.service_id == null ? null : Number(b.service_id),
+      serviceName: b.service_name,
+    };
+    const existing = await db`
+      SELECT * FROM arvo.reviews WHERE booking_id = ${data.bookingId}
+    `;
+    if (existing.length > 0) {
+      return {
+        ok: true,
+        alreadyReviewed: true,
+        booking,
+        review: rowToReview(existing[0] as Record<string, any>),
+      };
+    }
+    if (String(b.status) !== "completed") {
+      return {
+        ok: false,
+        error:
+          "This service hasn't been completed yet — reviews open once the job is done. If you've just been served, check the link from your completion email again shortly.",
+        booking,
+      };
+    }
+    const isCustomer = await isBookingCustomer(b, data.token);
+    return { ok: true, canReview: isCustomer, booking };
+  });
+
+export interface SubmitReviewResult {
+  ok: boolean;
+  error?: string;
+  review?: ReviewRow;
+  booking?: ReviewPageBooking;
+}
+
+/**
+ * Create a review. Full server-side enforcement repeats the getReviewPage
+ * checks (owner-of-booking + completed + not-yet-reviewed) so the endpoint is
+ * safe to call from any client. Comment is required (10–2000 chars) and the
+ * rating must be an integer 1–5.
+ */
+export const submitReview = createServerFn()
+  .validator((d: { bookingId: number; token?: string; rating: number; comment: string }) => d)
+  .handler(async ({ data }): Promise<SubmitReviewResult> => {
+    try {
+      const rating = Math.round(Number(data.rating));
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return { ok: false, error: "Please pick a star rating from 1 to 5." };
+      }
+      const comment = String(data.comment ?? "").trim();
+      if (comment.length < 10) {
+        return { ok: false, error: "Please write a short review (at least 10 characters)." };
+      }
+      if (comment.length > 2000) {
+        return { ok: false, error: "That review is a bit long — please keep it under 2,000 characters." };
+      }
+      if (!Number.isInteger(Number(data.bookingId)) || Number(data.bookingId) <= 0) {
+        return { ok: false, error: "Booking not found." };
+      }
+
+      const db = sql();
+      const rows = await db`
+        SELECT b.*, s.name AS shop_name, s.slug AS shop_slug, sv.name AS service_name
+        FROM arvo.bookings b
+        JOIN arvo.shops s ON s.id = b.shop_id
+        LEFT JOIN arvo.services sv ON sv.id = b.service_id
+        WHERE b.id = ${data.bookingId}
+      `;
+      if (rows.length === 0) return { ok: false, error: "Booking not found." };
+      const b = rows[0] as Record<string, any>;
+      if (String(b.status) !== "completed") {
+        return {
+          ok: false,
+          error:
+            "This service hasn't been completed yet — reviews open once the job is done.",
+        };
+      }
+      const isCustomer = await isBookingCustomer(b, data.token);
+      if (!isCustomer) {
+        return { ok: false, error: "Only the customer who booked this service can review it." };
+      }
+      const dup = await db`SELECT id FROM arvo.reviews WHERE booking_id = ${data.bookingId}`;
+      if (dup.length > 0) {
+        return { ok: false, error: "You've already reviewed this service." };
+      }
+
+      const inserted = await db`
+        INSERT INTO arvo.reviews
+          (booking_id, shop_id, service_id, customer_id, customer_name, customer_email, rating, comment)
+        VALUES
+          (${data.bookingId}, ${Number(b.shop_id)}, ${b.service_id ?? null}, ${b.customer_id ?? null}, ${b.customer_name}, ${b.customer_email}, ${rating}, ${comment})
+        RETURNING *
+      `;
+      return {
+        ok: true,
+        review: rowToReview(inserted[0] as Record<string, any>),
+        booking: {
+          id: Number(b.id),
+          reference: `ARVO-${String(Number(b.id)).padStart(4, "0")}`,
+          shopName: b.shop_name,
+          shopSlug: b.shop_slug,
+          serviceId: b.service_id == null ? null : Number(b.service_id),
+          serviceName: b.service_name,
+        },
+      };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+/** One review plus the service name at display time (LEFT JOIN — null if the
+ *  service was deleted; the review itself is preserved via ON DELETE SET NULL). */
+export interface ShopReviewRow extends ReviewRow {
+  serviceName: string | null;
+}
+
+/**
+ * All reviews for one mobile business, newest first. Public — powers the
+ * ratings + review list on the shop's service listing page
+ * (src/routes/shop.$slug.tsx). Per-service averages/counts are computed
+ * client-side from this single fetch.
+ */
+export const getShopReviews = createServerFn()
+  .validator((d: string) => d)
+  .handler(async ({ data: slug }): Promise<ShopReviewRow[]> => {
+    await ensureSeed();
+    const db = sql();
+    const shops = await db`SELECT id FROM arvo.shops WHERE slug = ${slug}`;
+    if (shops.length === 0) return [];
+    const shopId = Number((shops[0] as { id: number }).id);
+    const rows = await db`
+      SELECT rv.*, sv.name AS service_name
+      FROM arvo.reviews rv
+      LEFT JOIN arvo.services sv ON sv.id = rv.service_id
+      WHERE rv.shop_id = ${shopId}
+      ORDER BY rv.created_at DESC
+    `;
+    return (rows as Record<string, any>[]).map((r) => ({
+      ...rowToReview(r),
+      serviceName: r.service_name,
+    }));
+  });

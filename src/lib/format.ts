@@ -45,3 +45,16 @@ export function formatCreated(iso: string): string {
     minute: "2-digit",
   });
 }
+
+/**
+ * Privacy-preserving reviewer name for public review listings: first name +
+ * initial of the second word, e.g. "Sarah P." for "Sarah Pemberton". Falls
+ * back to the full first word for single-word names and "A customer" when the
+ * name is empty.
+ */
+export function reviewerDisplayName(fullName: string): string {
+  const parts = (fullName || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "A customer";
+  if (parts.length === 1) return parts[0];
+  return `${parts[0]} ${parts[1].charAt(0).toUpperCase()}.`;
+}

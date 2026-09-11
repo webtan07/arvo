@@ -11,6 +11,9 @@ import { sql } from "./connection";
  *   services     — what a shop offers (name, duration, price_cents, description)
  *   slots        — bookable time slots per shop + day (start/end, open status)
  *   bookings     — customer detail + chosen service/slot + status + payment option
+ *   reviews      — customer reviews per mobile service (Phase B part 4):
+ *                  exactly one review per booking (booking_id UNIQUE), only for
+ *                  completed bookings; rating 1–5 + a required comment.
  *
  * This is intentionally a minimal scaffold: the full booking UI, availability
  * generation and payments are later steps.
@@ -193,6 +196,27 @@ export const CREATE_TABLES: string[] = [
     expires_at   TIMESTAMPTZ NOT NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
+
+  // Customer reviews per mobile service (Phase B part 4). ONE review per
+  // completed booking (booking_id UNIQUE — server-enforced before insert too).
+  // rating 1–5; comment is REQUIRED (richer reviews) and validated server-side
+  // (trimmed, 10–2000 chars). customer_name/customer_email snapshot the booking
+  // so the review survives even if the customer row changes; the public UI
+  // renders reviewers as "First I." for privacy. Index (shop_id, created_at)
+  // covers the shop page's newest-first review listing.
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA}.reviews (
+    id             BIGSERIAL PRIMARY KEY,
+    booking_id     BIGINT NOT NULL UNIQUE REFERENCES ${SCHEMA}.bookings(id) ON DELETE CASCADE,
+    shop_id        BIGINT NOT NULL REFERENCES ${SCHEMA}.shops(id) ON DELETE CASCADE,
+    service_id     BIGINT REFERENCES ${SCHEMA}.services(id) ON DELETE SET NULL,
+    customer_id    BIGINT,
+    customer_name  TEXT NOT NULL,
+    customer_email TEXT NOT NULL,
+    rating         INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    comment        TEXT NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_arvo_reviews_shop ON ${SCHEMA}.reviews (shop_id, created_at)`,
 ];
 
 // Idempotent column migrations for databases created before these columns existed.
