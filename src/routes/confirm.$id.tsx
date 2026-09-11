@@ -48,7 +48,19 @@ function ConfirmPage() {
                 {booking.total_cents != null && booking.fee_cents != null && (
                   <Row label="Stripe fee" value={formatAUD(booking.fee_cents)} />
                 )}
-                <Row label="Total paid" value={formatAUD(booking.total_cents ?? booking.priceCents ?? 0)} />
+                {booking.credit_applied_cents > 0 && (
+                  <Row label="Credit applied" value={`−${formatAUD(booking.credit_applied_cents)}`} />
+                )}
+                <Row
+                  label="Total paid"
+                  value={formatAUD(
+                    Math.max(
+                      (booking.total_cents ?? booking.priceCents ?? 0) -
+                        (booking.credit_applied_cents ?? 0),
+                      0,
+                    ),
+                  )}
+                />
               </>
             )}
           </dl>

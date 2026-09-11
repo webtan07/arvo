@@ -17,6 +17,37 @@ import { sql } from "./connection";
  */
 export const SCHEMA = "arvo";
 
+/**
+ * Status values (Phase B part 2 — owner-only cancellations + credits):
+ *
+ * arvo.bookings.status:
+ *   'pending'              legacy default (pre-payment-flow bookings)
+ *   'awaiting_payment'     created, card charge in flight (pay_online)
+ *   'confirmed'            card charge succeeded (or paid in full by credit)
+ *   'cancellation_pending' business owner cancelled; CUSTOMER must choose
+ *                          reschedule OR cancel-for-credit. Slot is freed for
+ *                          new bookings; reminders are suppressed. Customers
+ *                          can NEVER cancel on their own — only the owner can
+ *                          initiate this state (server-enforced).
+ *   'rescheduled'          customer chose RESCHEDULE: same booking record +
+ *                          payment, moved to a new slot for the same service.
+ *   'cancelled'            final state. Reached ONLY via the customer choosing
+ *                          "cancel for credit" after an owner cancellation
+ *                          (credit row issued, no card refund).
+ *
+ * Older queries that exclude cancelled bookings treat 'cancellation_pending'
+ * the same way (a pending-decision booking does not occupy its slot).
+ *
+ * arvo.transactions.status:
+ *   'pending'  -> 'paid' on successful card charge
+ *   'credited'  final state when the booking is cancelled-for-credit — the
+ *               money was NOT refunded to the card; it became an arvo.credits
+ *               row for the customer.
+ *
+ * arvo.credits.status:
+ *   'active' -> 'used' (applied at checkout) | 'expired' (forfeited, 90 days)
+ */
+
 export const CREATE_TABLES: string[] = [
   `CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`,
 
@@ -110,6 +141,28 @@ export const CREATE_TABLES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_arvo_transactions_shop ON ${SCHEMA}.transactions (shop_id, status)`,
   `CREATE INDEX IF NOT EXISTS idx_arvo_transactions_booking ON ${SCHEMA}.transactions (booking_id)`,
 
+  // Customer credit balance (Phase B part 2). A credit is issued ONLY when the
+  // mobile business owner cancels a paid booking and the customer chooses
+  // "cancel for credit" (no card refund — the money becomes store credit).
+  // Credits match by customer email (guests included) or customer account.
+  //   status: 'active' (usable) -> 'used' (applied at checkout) | 'expired'
+  // Expiry: 90 days from issue (CREDIT_EXPIRY_DAYS in src/lib/fees.ts);
+  // expired credits are forfeited and shown as expired in the UI.
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA}.credits (
+    id                   BIGSERIAL PRIMARY KEY,
+    customer_email       TEXT NOT NULL,
+    customer_id          BIGINT,
+    amount_cents         INTEGER NOT NULL,
+    currency             TEXT NOT NULL DEFAULT 'aud',
+    expires_at           TIMESTAMPTZ NOT NULL,
+    status               TEXT NOT NULL DEFAULT 'active',
+    source_booking_id    BIGINT NOT NULL REFERENCES ${SCHEMA}.bookings(id),
+    applied_to_booking_id BIGINT,
+    used_at              TIMESTAMPTZ,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_arvo_credits_email ON ${SCHEMA}.credits (customer_email, status)`,
+
   `CREATE TABLE IF NOT EXISTS ${SCHEMA}.owners (
     id            BIGSERIAL PRIMARY KEY,
     email         TEXT NOT NULL UNIQUE,
@@ -143,6 +196,20 @@ export const ALTER_TABLES: string[] = [
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS total_cents INTEGER`,
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS reminder_email_sent_at TIMESTAMPTZ`,
   `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS reminder_sms_sent_at TIMESTAMPTZ`,
+  // Phase B part 2 (owner-only cancellations + credits):
+  //   credit_applied_cents   — credit used at checkout (0 = none). PaymentIntent
+  //                            amount = service + fee − credit applied.
+  //   cancelled_at           — when the business owner cancelled the booking.
+  //   cancel_decision_token  — random single-use token placed in the customer's
+  //                            cancellation email links so a guest (or any
+  //                            customer) can reschedule / choose credit without
+  //                            logging in. Cleared when the choice is resolved.
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS credit_applied_cents INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`,
+  `ALTER TABLE ${SCHEMA}.bookings ADD COLUMN IF NOT EXISTS cancel_decision_token TEXT`,
+  // Transactions track the credit too: total_cents stays the NET cash that moved
+  // (service + fee − credit); credit_applied_cents records the applied amount.
+  `ALTER TABLE ${SCHEMA}.transactions ADD COLUMN IF NOT EXISTS credit_applied_cents INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE ${SCHEMA}.shops ADD COLUMN IF NOT EXISTS schedule JSONB`,
   `ALTER TABLE ${SCHEMA}.owners ADD COLUMN IF NOT EXISTS name TEXT`,
   // Password-reset: a SHA-256 hash of the raw reset token (never the raw token)

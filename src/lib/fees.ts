@@ -29,6 +29,14 @@ export const FEE_PERCENT_DEFAULT = 2.9; // % — Stripe standard (non-AU domesti
 export const FEE_FIXED_CENTS_DEFAULT = 30; // AUD cents — Stripe per-transaction fee
 export const FEE_CURRENCY = "aud"; // only AUD is supported today (matches services)
 
+/**
+ * Customer credit expiry (Phase B part 2). When a business owner cancels a paid
+ * booking and the customer chooses "cancel for credit", the amount paid becomes
+ * a credit valid for this many days from issue. Expired credits are forfeited
+ * (not usable; shown as expired in the UI). Single config place for the policy.
+ */
+export const CREDIT_EXPIRY_DAYS = 90;
+
 export interface FeeConfig {
   percent: number;
   fixedCents: number;

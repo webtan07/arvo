@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { getSessionUser, logout } from "~/db/auth";
-import { getMyBookings } from "~/db/server";
-import type { BookingView } from "~/db/server";
+import { getMyBookings, getCustomerCredits } from "~/db/server";
+import type { BookingView, CustomerCreditsResult } from "~/db/server";
 import type { SessionUser } from "~/db/auth";
 import { clearSessionToken, getSessionToken } from "~/lib/session";
 import { formatDateTime, formatAUD } from "~/lib/format";
+import CancellationAction from "~/components/CancellationAction";
 
 export const Route = createFileRoute("/account")({
   component: AccountPage,
@@ -14,6 +15,7 @@ export const Route = createFileRoute("/account")({
 function AccountPage() {
   const [user, setUser] = useState<SessionUser | null | undefined>(undefined); // undefined = loading
   const [bookings, setBookings] = useState<BookingView[]>([]);
+  const [credits, setCredits] = useState<CustomerCreditsResult | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -33,9 +35,13 @@ function AccountPage() {
         return;
       }
       setUser(sessionUser);
-      const my = await getMyBookings({ data: token });
+      const [my, creditRes] = await Promise.all([
+        getMyBookings({ data: token }),
+        getCustomerCredits({ data: { token } }),
+      ]);
       if (active) {
         setBookings(my);
+        setCredits(creditRes);
         setLoaded(true);
       }
     })();
@@ -56,6 +62,7 @@ function AccountPage() {
     clearSessionToken();
     setUser(null);
     setBookings([]);
+    setCredits(null);
   }
 
   // undefined = auth check still in flight
@@ -71,8 +78,8 @@ function AccountPage() {
       <div className="mx-auto max-w-2xl px-5 py-16 text-center">
         <h1 className="font-display text-3xl font-extrabold">My Bookings</h1>
         <p className="mx-auto mt-3 max-w-md text-ink-soft">
-          Sign in to see your upcoming and past bookings, manage them, and speed
-          up future bookings with your saved details.
+          Sign in to see your upcoming and past bookings, your credit balance,
+          and speed up future bookings with your saved details.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link to="/login" className="btn">
@@ -92,10 +99,20 @@ function AccountPage() {
   }
 
   const now = Date.now();
+  const ACTIVE = ["pending", "awaiting_payment", "confirmed", "rescheduled"];
+  const pendingDecision = bookings.filter((b) => b.status === "cancellation_pending");
   const upcoming = bookings.filter(
-    (b) => b.status !== "cancelled" && b.slotStartsAt && new Date(b.slotStartsAt).getTime() >= now,
+    (b) =>
+      ACTIVE.includes(b.status) &&
+      b.slotStartsAt &&
+      new Date(b.slotStartsAt).getTime() >= now,
   );
-  const past = bookings.filter((b) => !upcoming.includes(b));
+  const past = bookings.filter(
+    (b) => !pendingDecision.includes(b) && !upcoming.includes(b),
+  );
+
+  const activeCents = credits?.ok ? credits.totals.activeCents : 0;
+  const creditList = credits?.ok ? credits.credits : [];
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-8">
@@ -111,6 +128,57 @@ function AccountPage() {
           Sign out
         </button>
       </div>
+
+      {/* Credit balance */}
+      {loaded && creditList.length > 0 && (
+        <section className="card mb-8 p-5">
+          <h2 className="font-display text-lg font-bold">Your credit</h2>
+          <p className="mt-1 text-sm text-ink-soft">
+            Credit is issued when the mobile business cancels a paid booking and
+            you choose cancel-for-credit — it's applied at checkout (tick the box),
+            and unused credit expires.
+          </p>
+          {activeCents > 0 ? (
+            <p className="mt-3 font-display text-2xl font-extrabold text-brand">
+              {formatAUD(activeCents)} available
+            </p>
+          ) : (
+            <p className="mt-3 text-sm text-ink-soft">No usable credit right now.</p>
+          )}
+          <ul className="mt-4 space-y-2">
+            {creditList.map((c) => {
+              const expired = c.effectiveStatus === "expired";
+              const used = c.effectiveStatus === "used";
+              return (
+                <li
+                  key={c.id}
+                  className={`flex items-center justify-between gap-3 rounded-xl border border-line px-3 py-2 text-sm ${
+                    expired || used ? "bg-surface text-ink-soft" : "bg-brand/5"
+                  }`}
+                >
+                  <span>
+                    <span className="font-bold">{formatAUD(c.amount_cents)}</span>
+                    {!used && (
+                      <span className="text-xs text-ink-soft">
+                        {" "}
+                        · expires{" "}
+                        {new Date(c.expires_at).toLocaleDateString("en-AU", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })}
+                      </span>
+                    )}
+                  </span>
+                  <span className="chip shrink-0">
+                    {expired ? "Expired" : used ? "Used" : "Active"}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       {!loaded ? (
         <p className="rounded-xl bg-surface p-6 text-center text-ink-soft">
@@ -129,6 +197,62 @@ function AccountPage() {
         </div>
       ) : (
         <div className="space-y-8">
+          {/* Cancelled by the business — the customer must choose */}
+          {pendingDecision.length > 0 && (
+            <section>
+              <h2 className="mb-3 font-display text-lg font-bold">
+                Cancelled by the business — your choice{" "}
+                <span className="text-sm font-normal text-ink-soft">
+                  ({pendingDecision.length})
+                </span>
+              </h2>
+              <div className="grid gap-4">
+                {pendingDecision.map((b) => (
+                  <div key={b.id} className="card p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-wide text-brand">
+                          Reference ARVO-{String(b.id).padStart(4, "0")}
+                        </p>
+                        <h3 className="mt-1 font-display text-lg font-extrabold">
+                          {b.shopName}
+                        </h3>
+                        <p className="text-sm text-ink-soft">
+                          {b.serviceName || "Service"}
+                          {b.slotStartsAt ? (
+                            <>
+                              {" · was "}
+                              <span className="font-semibold text-ink">
+                                {formatDateTime(b.slotStartsAt)}
+                              </span>
+                            </>
+                          ) : null}
+                        </p>
+                      </div>
+                      <span className="chip bg-amber-100 text-amber-700">
+                        Needs your decision
+                      </span>
+                    </div>
+                    <div className="mt-4">
+                      <CancellationAction
+                        bookingId={b.id}
+                        token={getSessionToken() ?? undefined}
+                        onResolved={() => {
+                          // Refresh the list so the resolved booking moves out.
+                          const t = getSessionToken();
+                          if (t) {
+                            getMyBookings({ data: t }).then(setBookings);
+                            getCustomerCredits({ data: { token: t } }).then(setCredits);
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           <section>
             <h2 className="mb-3 font-display text-lg font-bold">
               Upcoming{" "}
@@ -192,6 +316,11 @@ function BookingCard({ b }: { b: BookingView }) {
           {b.priceCents != null && (
             <p className="mt-1 text-sm font-bold text-ink">{formatAUD(b.priceCents)}</p>
           )}
+          {b.credit_applied_cents > 0 && (
+            <p className="mt-0.5 text-xs font-semibold text-brand">
+              Credit applied: {formatAUD(b.credit_applied_cents)}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <StatusBadge b={b} cancelled={cancelled} />
@@ -206,6 +335,7 @@ function BookingCard({ b }: { b: BookingView }) {
 function StatusBadge({ b, cancelled }: { b: BookingView; cancelled: boolean }) {
   if (cancelled) return <span className="chip bg-surface text-ink-soft">Cancelled</span>;
   if (b.status === "confirmed") return <span className="chip bg-green-100 text-green-700">Confirmed</span>;
+  if (b.status === "rescheduled") return <span className="chip bg-green-100 text-green-700">Rescheduled</span>;
   if (b.status === "awaiting_payment") return <span className="chip bg-amber-100 text-amber-700">Awaiting payment</span>;
   return <span className="chip bg-surface text-ink-soft">{b.status}</span>;
 }
