@@ -14,6 +14,9 @@ import { sql } from "./connection";
  *   reviews      — customer reviews per mobile service (Phase B part 4):
  *                  exactly one review per booking (booking_id UNIQUE), only for
  *                  completed bookings; rating 1–5 + a required comment.
+ *   admins       — super-admin analytics accounts (Phase B part 5): the Arvo
+ *                  owner (superadmin) + a view-only analytics account,
+ *                  bootstrapped from env at ensureSchema time.
  *
  * This is intentionally a minimal scaffold: the full booking UI, availability
  * generation and payments are later steps.
@@ -217,6 +220,26 @@ export const CREATE_TABLES: string[] = [
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
   `CREATE INDEX IF NOT EXISTS idx_arvo_reviews_shop ON ${SCHEMA}.reviews (shop_id, created_at)`,
+
+  // Super-admin analytics accounts (Phase B part 5 — FINAL). The Arvo owner
+  // (superadmin) and the view-only analytics account (analytics_viewer) — both
+  // VIEW-ONLY for now: no admin mutation exists anywhere in this phase, and
+  // admin sessions can never resolve as a customer/owner session (so every
+  // existing mutating server fn rejects them by construction).
+  //   role          superadmin | analytics_viewer (CHECK constraint)
+  //   password_hash same scrypt salt:hash scheme as owners/customers.
+  //   last_login_at stamped on each successful admin login.
+  // Rows are BOOTSTRAPPED from env at ensureSchema time (idempotent upsert by
+  // email) — SUPERADMIN_EMAIL/SUPERADMIN_PASSWORD and ANALYTICS_EMAIL/
+  // ANALYTICS_PASSWORD; absent env → a warning is logged and no rows created.
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA}.admins (
+    id             BIGSERIAL PRIMARY KEY,
+    email          TEXT NOT NULL UNIQUE,
+    password_hash  TEXT NOT NULL,
+    role           TEXT NOT NULL CHECK (role IN ('superadmin', 'analytics_viewer')),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_login_at  TIMESTAMPTZ
+  )`,
 ];
 
 // Idempotent column migrations for databases created before these columns existed.
@@ -301,6 +324,18 @@ export async function ensureSchema(): Promise<void> {
   }
   if (errors.length > 0) {
     throw new Error(`[arvo:schema] ${errors.length} statement(s) failed: ${errors.join(" | ")}`);
+  }
+  // Admin accounts are bootstrapped from env (SUPERADMIN_EMAIL/…,
+  // ANALYTICS_EMAIL/…) — idempotent upsert by email, hashed server-side.
+  // Dynamic import avoids a schema.ts → admin.ts → auth.ts → schema.ts cycle.
+  try {
+    const { bootstrapAdmins } = await import("./admin");
+    await bootstrapAdmins();
+  } catch (e) {
+    console.error(
+      "[arvo:schema] admin bootstrap failed:",
+      e instanceof Error ? e.message : e,
+    );
   }
 }
 
